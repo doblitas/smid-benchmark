@@ -13,16 +13,76 @@ export function getApifyClient() {
   return new ApifyClient({ token });
 }
 
+/**
+ * website-content-crawler NO es ideal para SMID prensa:
+ * - Está pensado para extraer texto a LLMs/RAG, no para detectar banners.
+ * - Por defecto usa Playwright y pide ~8 GB; con poca RAM muere ("Killed").
+ *
+ * Para el piloto de medios externos usamos cheerio-scraper (HTTP liviano)
+ * y buscamos menciones de marca / señales publicitarias en el HTML.
+ */
 const DEFAULT_ACTORS: Record<SourceKey, string> = {
   meta: process.env.APIFY_META_ACTOR_ID || "apify/facebook-ads-scraper",
   google:
     process.env.APIFY_GOOGLE_ACTOR_ID ||
     "curious_coder/google-ads-transparency-scraper",
-  press: process.env.APIFY_PRESS_ACTOR_ID || "apify/website-content-crawler",
+  press: process.env.APIFY_PRESS_ACTOR_ID || "apify/cheerio-scraper",
 };
 
 function brandsForInput(input: AnalysisInput) {
   return [input.clientBrand, ...input.competitors].map((b) => b.trim());
+}
+
+function buildPressPageFunction(brands: string[]) {
+  // pageFunction se envía como string al Actor Cheerio Scraper.
+  const brandsJson = JSON.stringify(brands);
+  return `async function pageFunction(context) {
+  const { $, request, log } = context;
+  const brands = ${brandsJson};
+  const url = request.url;
+  const title = $('title').first().text().trim();
+  const bodyText = $('body').text().replace(/\\s+/g, ' ').trim();
+  const html = $.html() || '';
+
+  const brandHits = brands.map((brand) => {
+    const re = new RegExp(brand.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'), 'i');
+    const inTitle = re.test(title);
+    const inText = re.test(bodyText);
+    const inHtml = re.test(html);
+    const linkMatches = $('a[href], img[alt], img[src]')
+      .toArray()
+      .filter((el) => {
+        const href = ($(el).attr('href') || '') + ' ' + ($(el).attr('src') || '') + ' ' + ($(el).attr('alt') || '') + ' ' + ($(el).text() || '');
+        return re.test(href);
+      }).length;
+
+    return {
+      brand,
+      mentioned: inTitle || inText || inHtml || linkMatches > 0,
+      inTitle,
+      inText,
+      inHtml,
+      linkOrImageHits: linkMatches,
+    };
+  }).filter((h) => h.mentioned);
+
+  const adSignals = {
+    iframeCount: $('iframe').length,
+    adsenseLike: html.toLowerCase().includes('googlesyndication') || html.toLowerCase().includes('doubleclick'),
+    dataAdSlots: $('[data-ad], [id*="ad-"], [class*="ad-"], [class*="banner"]').length,
+  };
+
+  log.info('Press page scanned', { url, brandHits: brandHits.length, adSignals });
+
+  return {
+    platform: 'prensa',
+    url,
+    title,
+    brandHits,
+    adSignals,
+    capturedAt: new Date().toISOString(),
+  };
+}`;
 }
 
 function buildActorInput(source: SourceKey, input: AnalysisInput) {
@@ -31,7 +91,6 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
 
   if (source === "meta") {
     return {
-      // Inputs flexibles: distintos actors de Meta Ad Library aceptan variantes.
       country,
       countries: [country],
       searchTerms: brands,
@@ -54,8 +113,6 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
     };
   }
 
-  // Piloto: pocas URLs y poca concurrencia. Playwright con 6 homes
-  // en 1024 MB suele morir por OOM (proceso "Killed" en los logs).
   const media = (
     input.pressMedia.length > 0
       ? input.pressMedia
@@ -67,24 +124,46 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
         ]
   ).slice(0, 4);
 
+  const pressActor = DEFAULT_ACTORS.press;
+
+  // Compatibilidad si alguien fuerza website-content-crawler por env.
+  if (pressActor.includes("website-content-crawler")) {
+    return {
+      startUrls: media.map((url) => ({ url })),
+      maxCrawlPages: media.length,
+      maxRequestsPerCrawl: media.length,
+      maxCrawlDepth: 0,
+      crawlerType: "cheerio",
+      initialConcurrency: 1,
+      maxConcurrency: 1,
+      maxScrollHeightPixels: 0,
+      saveFiles: false,
+      saveScreenshots: false,
+    };
+  }
+
+  // Default: cheerio-scraper — liviano, sin browser, ~1024 MB alcanza.
   return {
     startUrls: media.map((url) => ({ url })),
-    maxCrawlPages: media.length,
-    maxRequestsPerCrawl: media.length,
-    // Cheerio/raw HTTP usa mucho menos RAM que Playwright.
-    crawlerType: "cheerio",
+    keepUrlFragments: false,
+    linkSelector: "",
+    globs: [],
+    pseudoUrls: [],
+    pageFunction: buildPressPageFunction(brands),
+    proxyConfiguration: { useApifyProxy: true },
     initialConcurrency: 1,
-    maxConcurrency: 1,
-    maxScrollHeightPixels: 0,
-    saveFiles: false,
-    saveScreenshots: false,
-    excludeUrlGlobs: ["/**/*.{png,jpg,jpeg,gif,svg,webp,css,woff,woff2}"],
+    maxConcurrency: 2,
+    maxRequestRetries: 2,
+    maxPagesPerCrawl: media.length,
+    maxRequestsPerCrawl: media.length,
+    pageFunctionTimeoutSecs: 60,
   };
 }
 
 function memoryForSource(source: SourceKey) {
   if (source === "press") {
-    return Number(process.env.APIFY_PRESS_MEMORY_MB || 4096);
+    // Cheerio: 1024 basta. Si vuelven a WCC+Playwright, subir a 8192.
+    return Number(process.env.APIFY_PRESS_MEMORY_MB || 1024);
   }
   if (source === "meta") {
     return Number(process.env.APIFY_META_MEMORY_MB || 2048);

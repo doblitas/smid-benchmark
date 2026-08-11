@@ -58,9 +58,19 @@ Team: `doblitasgmailcoms-projects`
 
 ## Entregables SMID del reporte
 
-1. Temáticas de comunicación  
-2. SOV impresiones medios externos  
-3. SOV impresiones medios propios de pago  
-4. Inversión estimada Meta / Google  
+1. Temáticas de comunicación
+2. SOV impresiones medios externos
+3. SOV impresiones medios propios de pago
+4. Inversión estimada Meta / Google
+
+## Actors de Apify (recomendados)
+
+| Fuente | Actor | Por qué |
+|---|---|---|
+| Meta | `apify/facebook-ads-scraper` | Ad Library |
+| Google | Transparency scraper configurable | Ads Transparency |
+| Prensa | **`apify/cheerio-scraper`** (default) | HTTP liviano; detecta menciones/señales de ads |
+
+**No uses** `apify/website-content-crawler` para prensa SMID: está hecho para extraer texto a LLMs, por defecto abre Playwright y suele morir por OOM con poca memoria (`Killed` en logs). Si lo fuerzas, usa `crawlerType: "cheerio"`, `maxCrawlDepth: 0` y ≥ 4–8 GB.
 
 Las impresiones e inversión se etiquetan siempre como **estimadas**.
