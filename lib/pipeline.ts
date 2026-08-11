@@ -33,8 +33,8 @@ export async function createAndStartAnalysis(
   job = appendLog(
     job,
     useDemo
-      ? "Modo demo: se generará el reporte SMID sin Actors (falta APIFY_TOKEN o forceDemo)."
-      : "Modo live: iniciando Actors de Apify.",
+      ? "Preparando muestra ilustrativa del reporte SMID…"
+      : "Recopilando señales publicitarias de las fuentes seleccionadas…",
   );
   await saveJob(job);
 
@@ -52,7 +52,7 @@ export async function processAnalysis(id: string) {
     if (current.mode === "demo") {
       await updateJob(id, {
         status: "running",
-        logs: appendLog(current, "Simulando captura competitiva...").logs,
+        logs: appendLog(current, "Analizando competencia…").logs,
       });
       await sleep(1200);
 
@@ -60,7 +60,7 @@ export async function processAnalysis(id: string) {
       if (!mid) return;
       await updateJob(id, {
         status: "building_report",
-        logs: appendLog(mid, "Construyendo reporte SMID...").logs,
+        logs: appendLog(mid, "Preparando reporte SMID…").logs,
       });
       await sleep(800);
 
@@ -77,14 +77,23 @@ export async function processAnalysis(id: string) {
 
     await updateJob(id, {
       status: "running",
-      logs: appendLog(current, "Lanzando Actors seleccionados...").logs,
+      logs: appendLog(current, "Recopilando señales de Meta Ads, Google Ads y medios…").logs,
     });
 
     const runs = await startSourceRuns(current.input, current.input.sources);
     let job = await getJob(id);
     if (!job) return;
+    const sourceNames = runs
+      .map((r) =>
+        r.source === "meta"
+          ? "Meta Ads"
+          : r.source === "google"
+            ? "Google Ads"
+            : "Medios digitales",
+      )
+      .join(", ");
     job = {
-      ...appendLog(job, `Actors iniciados: ${runs.map((r) => r.source).join(", ")}`),
+      ...appendLog(job, `Fuentes en análisis: ${sourceNames}.`),
       runs,
     };
     await saveJob(job);
@@ -96,7 +105,7 @@ export async function processAnalysis(id: string) {
       job = (await getJob(id))!;
       const refreshed = await refreshRuns(job.runs);
       job = {
-        ...appendLog(job, "Consultando estado de Actors..."),
+        ...appendLog(job, "Actualizando progreso del análisis…"),
         runs: refreshed,
       };
       await saveJob(job);
@@ -110,7 +119,7 @@ export async function processAnalysis(id: string) {
     job = (await getJob(id))!;
     await updateJob(id, {
       status: "building_report",
-      logs: appendLog(job, "Descargando datasets y armando reporte...").logs,
+      logs: appendLog(job, "Consolidando hallazgos y armando el reporte…").logs,
     });
 
     const datasets: Record<string, Record<string, unknown>[]> = {};
@@ -128,7 +137,7 @@ export async function processAnalysis(id: string) {
     await updateJob(id, {
       status: "completed",
       report,
-      logs: appendLog(finalJob, "Reporte live listo.").logs,
+      logs: appendLog(finalJob, "Reporte listo.").logs,
     });
   } catch (error) {
     const failed = await getJob(id);
@@ -136,10 +145,7 @@ export async function processAnalysis(id: string) {
     await updateJob(id, {
       status: "failed",
       error: error instanceof Error ? error.message : "Error desconocido",
-      logs: appendLog(
-        failed,
-        `Error: ${error instanceof Error ? error.message : "desconocido"}`,
-      ).logs,
+      logs: appendLog(failed, "No se pudo completar el análisis.").logs,
     });
   }
 }

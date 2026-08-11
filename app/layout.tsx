@@ -18,7 +18,7 @@ const instrument = Instrument_Serif({
 export const metadata: Metadata = {
   title: "BENCHMARK SMID",
   description:
-    "Inputs → Apify → reporte de inteligencia publicitaria competitiva (KIA vs competencia).",
+    "Benchmark de inteligencia publicitaria: temáticas, SOV e inversión estimada de la competencia.",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

@@ -15,8 +15,9 @@ export function ReportView({ report }: { report: ReportData }) {
   return (
     <div className="space-y-8">
       <div className="border-l-4 border-amber-700 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-        Impresiones e inversión son <strong>estimaciones</strong>. Creatividades/campañas
-        observadas dependen de la captura. Modo: <strong>{report.mode}</strong>.
+        Impresiones e inversión son <strong>estimaciones</strong>. Las creatividades y
+        campañas reflejan la actividad observada en el periodo.
+        {report.mode === "demo" ? " Este reporte es una muestra ilustrativa." : ""}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

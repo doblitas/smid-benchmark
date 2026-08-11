@@ -1,76 +1,35 @@
 # BENCHMARK SMID
 
-App Next.js: **inputs → Apify → reporte** de inteligencia publicitaria competitiva.
+Producto de inteligencia publicitaria competitiva: briefing → análisis → reporte mensual.
 
-## Flujo
+## Cómo usarlo
 
-1. Abre [`/nuevo`](http://127.0.0.1:3000/nuevo)
-2. Ingresa empresa, competencia, datos propios y fuentes
-3. Corre el análisis:
-   - **Demo** (sin token): reporte ilustrativo SMID en segundos
-   - **Live** (con `APIFY_TOKEN`): lanza Actors de Meta / Google / prensa
-4. Revisa el entregable en `/analisis/[id]`
+1. Abre **Nuevo análisis**
+2. Completa cliente, competencia, periodo y fuentes (Meta Ads, Google Ads, medios digitales)
+3. Opcional: marca *Generar muestra ilustrativa* para ver el formato del reporte con datos de ejemplo
+4. Genera el reporte SMID y revisa:
+   - Temáticas de comunicación
+   - SOV de impresiones en medios externos
+   - SOV de impresiones en medios propios de pago
+   - Inversión estimada Meta / Google
+
+Las impresiones e inversión se presentan siempre como **estimaciones**.
 
 ## Arranque local
 
 ```bash
 cd smid-benchmark
-cp .env.example .env.local
-# pega tu APIFY_TOKEN (opcional para demo)
 npm install
 npm run dev -- --hostname 127.0.0.1 --port 3000
 ```
 
 Abre: [http://127.0.0.1:3000/nuevo](http://127.0.0.1:3000/nuevo)
 
-## Conectar Apify (modo live)
+## Desarrollo
 
-1. En [Apify Console → Integrations](https://console.apify.com/account/integrations) copia el API token
-2. Ponlo en `.env.local`:
+Configuración opcional en `.env.local` (no visible en el producto):
 
-```bash
-APIFY_TOKEN=apify_api_xxx
-```
+- `APIFY_TOKEN` — habilita captura en vivo
+- `APIFY_*_ACTOR_ID` / `APIFY_*_MEMORY_MB` — ajuste fino de fuentes
 
-3. Reinicia `npm run dev`
-4. En `/nuevo`, **desmarca** “Forzar modo demo” y corre el análisis
-
-Actors por defecto (configurables):
-
-| Fuente | Variable | Default |
-|---|---|---|
-| Meta | `APIFY_META_ACTOR_ID` | `apify/facebook-ads-scraper` |
-| Google | `APIFY_GOOGLE_ACTOR_ID` | `curious_coder/google-ads-transparency-scraper` |
-| Prensa | `APIFY_PRESS_ACTOR_ID` | `apify/website-content-crawler` |
-
-## Deploy en Vercel (MCP o dashboard)
-
-Proyecto ya creado en el team: **smid-benchmark**  
-Team: `doblitasgmailcoms-projects`
-
-1. En Vercel → Project → Settings → Environment Variables agrega:
-   - `APIFY_TOKEN`
-   - (opcional) IDs de Actors
-2. Redeploy production (desde MCP `deploy_to_vercel` o conectando el repo Git)
-3. URL esperada: `https://smid-benchmark-doblitasgmailcoms-projects.vercel.app`
-
-> El primer deploy vía MCP falló por una versión compactada sin tipos. El código local **sí compila** (`npm run build`). Hay que redeployar con los archivos tipados del directorio `smid-benchmark/`.
-
-## Entregables SMID del reporte
-
-1. Temáticas de comunicación
-2. SOV impresiones medios externos
-3. SOV impresiones medios propios de pago
-4. Inversión estimada Meta / Google
-
-## Actors de Apify (recomendados)
-
-| Fuente | Actor | Por qué |
-|---|---|---|
-| Meta | `apify/facebook-ads-scraper` | Ad Library |
-| Google | Transparency scraper configurable | Ads Transparency |
-| Prensa | **`apify/cheerio-scraper`** (default) | HTTP liviano; detecta menciones/señales de ads |
-
-**No uses** `apify/website-content-crawler` para prensa SMID: está hecho para extraer texto a LLMs, por defecto abre Playwright y suele morir por OOM con poca memoria (`Killed` en logs). Si lo fuerzas, usa `crawlerType: "cheerio"`, `maxCrawlDepth: 0` y ≥ 4–8 GB.
-
-Las impresiones e inversión se etiquetan siempre como **estimadas**.
+Deploy: conectar el repo a Vercel y definir las variables de entorno en el proyecto.

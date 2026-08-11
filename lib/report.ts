@@ -221,8 +221,12 @@ export function buildDemoReport(input: AnalysisInput): ReportData {
     ],
     methodologyNotes: [
       "Impresiones e inversión son estimaciones con rango, no cifras auditadas.",
-      "Modo demo: no se ejecutaron Actors de Apify; el layout refleja el entregable SMID.",
-      `Fuentes seleccionadas: ${input.sources.join(", ")}.`,
+      "Esta es una muestra ilustrativa del formato de entregable SMID.",
+      `Fuentes seleccionadas: ${input.sources
+        .map((s) =>
+          s === "meta" ? "Meta Ads" : s === "google" ? "Google Ads" : "Medios digitales",
+        )
+        .join(", ")}.`,
       `País: ${input.country}. Categoría: ${input.category}. Periodo: ${input.periodLabel}.`,
     ],
   };
@@ -288,14 +292,14 @@ export function buildLiveReport(
     themes: liveThemes.length > 0 ? liveThemes.slice(0, 12) : base.themes,
     paidSov,
     findings: [
-      `Captura live: Meta ${metaItems.length} ítems, Google ${googleItems.length}, Prensa ${pressItems.length}.`,
+      `Señales observadas: Meta Ads ${metaItems.length}, Google Ads ${googleItems.length}, medios digitales ${pressItems.length}.`,
       ...base.findings.slice(0, 3),
     ],
     methodologyNotes: [
-      "Corrido live con Apify. Las impresiones/inversión siguen siendo estimadas.",
-      `Meta actor items: ${metaItems.length}. Google: ${googleItems.length}. Prensa: ${pressItems.length}.`,
-      "Si un Actor devolvió poco volumen, revisa IDs de Actor en variables de entorno.",
-      ...base.methodologyNotes.filter((n) => !n.includes("Modo demo")),
+      "Análisis con captura del periodo. Las impresiones e inversión siguen siendo estimadas.",
+      `Volumen observado — Meta Ads: ${metaItems.length}. Google Ads: ${googleItems.length}. Medios digitales: ${pressItems.length}.`,
+      "Si alguna fuente devolvió poco volumen, conviene ampliar el periodo o revisar los anunciantes locales.",
+      ...base.methodologyNotes.filter((n) => !n.includes("muestra ilustrativa")),
     ],
   };
 }

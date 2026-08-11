@@ -198,7 +198,7 @@ export async function startSourceRuns(
         actorId,
         runId: "",
         status: "FAILED",
-        error: error instanceof Error ? error.message : "No se pudo iniciar el Actor",
+        error: error instanceof Error ? error.message : "No se pudo iniciar la fuente",
       });
     }
   }

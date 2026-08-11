@@ -1,12 +1,18 @@
 import Link from "next/link";
-import { hasApifyToken } from "@/lib/apify";
 import { listJobs } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
+const statusLabel: Record<string, string> = {
+  queued: "En cola",
+  running: "Analizando",
+  building_report: "Preparando reporte",
+  completed: "Listo",
+  failed: "Con error",
+};
+
 export default async function HomePage() {
   const jobs = await listJobs();
-  const apifyReady = hasApifyToken();
 
   return (
     <div className="space-y-10">
@@ -15,23 +21,19 @@ export default async function HomePage() {
           Inteligencia publicitaria · Bolivia
         </p>
         <h1 className="font-serif text-5xl leading-none text-[var(--ink)]">
-          De inputs a reporte SMID en un flujo
+          Benchmark SMID listo para entregar
         </h1>
         <p className="text-[var(--muted)]">
-          Cargas empresa, competencia, datos propios y fuentes. La app corre Apify
-          (Meta, Google, prensa) y entrega el benchmark con temáticas, SOV e
-          inversión estimada.
+          Define cliente, competencia y fuentes. Obtén temáticas, share of voice e
+          inversión estimada en un reporte mensual claro.
         </p>
         <div className="flex flex-wrap gap-3">
           <Link
             href="/nuevo"
             className="bg-[var(--ink)] px-5 py-3 text-sm font-semibold text-[var(--bg)]"
           >
-            Empezar nuevo análisis
+            Nuevo análisis
           </Link>
-          <span className="border border-[var(--line)] bg-[var(--soft)] px-3 py-3 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-            Apify {apifyReady ? "conectado" : "modo demo"}
-          </span>
         </div>
       </section>
 
@@ -39,13 +41,13 @@ export default async function HomePage() {
         {[
           {
             n: "01",
-            t: "Inputs",
+            t: "Briefing",
             d: "Cliente, competencia, periodo, fuentes y datos que ya tienes.",
           },
           {
             n: "02",
-            t: "Captura",
-            d: "Actors de Apify para Meta, Google y medios externos.",
+            t: "Análisis",
+            d: "Señales de Meta Ads, Google Ads y medios digitales.",
           },
           {
             n: "03",
@@ -65,7 +67,7 @@ export default async function HomePage() {
         <h2 className="font-serif text-2xl">Análisis recientes</h2>
         {jobs.length === 0 ? (
           <p className="text-sm text-[var(--muted)]">
-            Aún no hay corridas. Crea la primera desde{" "}
+            Aún no hay análisis. Crea el primero desde{" "}
             <Link href="/nuevo" className="underline">
               Nuevo análisis
             </Link>
@@ -84,7 +86,8 @@ export default async function HomePage() {
                   {job.input.competitors.join(", ")}
                 </span>
                 <span className="text-xs uppercase tracking-wide text-[var(--muted)]">
-                  {job.status} · {job.mode}
+                  {statusLabel[job.status] || job.status}
+                  {job.mode === "demo" ? " · muestra" : ""}
                 </span>
               </Link>
             ))}

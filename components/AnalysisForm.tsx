@@ -14,7 +14,7 @@ const DEFAULT_MEDIA = [
 
 type SourceKey = "meta" | "google" | "press";
 
-export function AnalysisForm({ apifyConfigured }: { apifyConfigured: boolean }) {
+export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
   const router = useRouter();
   const [clientBrand, setClientBrand] = useState("KIA");
   const [competitors, setCompetitors] = useState("HYUNDAI");
@@ -25,7 +25,7 @@ export function AnalysisForm({ apifyConfigured }: { apifyConfigured: boolean }) 
   const [notes, setNotes] = useState("");
   const [sources, setSources] = useState<SourceKey[]>(["meta", "google", "press"]);
   const [pressMedia, setPressMedia] = useState(DEFAULT_MEDIA.join("\n"));
-  const [forceDemo, setForceDemo] = useState(!apifyConfigured);
+  const [sampleOnly, setSampleOnly] = useState(!captureReady);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -62,7 +62,7 @@ export function AnalysisForm({ apifyConfigured }: { apifyConfigured: boolean }) 
           .split("\n")
           .map((line) => line.trim())
           .filter(Boolean),
-        forceDemo,
+        forceDemo: sampleOnly,
       };
 
       const res = await fetch("/api/analyses", {
@@ -122,28 +122,27 @@ export function AnalysisForm({ apifyConfigured }: { apifyConfigured: boolean }) 
       </section>
 
       <section className="space-y-3">
-        <h2 className="font-serif text-2xl text-[var(--ink)]">Fuentes a estimar / capturar</h2>
+        <h2 className="font-serif text-2xl text-[var(--ink)]">Fuentes del análisis</h2>
         <p className="text-sm text-[var(--muted)]">
-          Elige de dónde sacar evidencia. Con Apify se lanzan Actors; sin token se genera el
-          reporte en modo demo.
+          Elige dónde observar la actividad publicitaria de la competencia.
         </p>
         <div className="grid gap-3 sm:grid-cols-3">
           <SourceCard
             active={sources.includes("meta")}
             title="Meta Ads"
-            description="Ad Library · creatividades y campañas de pago"
+            description="Creatividades y campañas de pago en Facebook e Instagram"
             onClick={() => toggleSource("meta")}
           />
           <SourceCard
             active={sources.includes("google")}
             title="Google Ads"
-            description="Transparency Center · Search / Display / YouTube"
+            description="Search, Display y YouTube de los anunciantes"
             onClick={() => toggleSource("google")}
           />
           <SourceCard
             active={sources.includes("press")}
-            title="Medios externos"
-            description="Portales bolivianos · banners y apariciones"
+            title="Medios digitales"
+            description="Portales y prensa digital · banners y apariciones"
             onClick={() => toggleSource("press")}
           />
         </div>
@@ -151,8 +150,8 @@ export function AnalysisForm({ apifyConfigured }: { apifyConfigured: boolean }) 
 
       {sources.includes("press") && (
         <Field
-          label="URLs de medios externos"
-          hint="Una por línea. Se usan para el SOV de prensa digital."
+          label="Medios digitales a monitorear"
+          hint="Una URL por línea. Se usan para el SOV en medios externos."
         >
           <textarea
             className="input min-h-32 font-mono text-sm"
@@ -189,17 +188,18 @@ export function AnalysisForm({ apifyConfigured }: { apifyConfigured: boolean }) 
           <input
             type="checkbox"
             className="mt-1"
-            checked={forceDemo}
-            onChange={(e) => setForceDemo(e.target.checked)}
+            checked={sampleOnly}
+            onChange={(e) => setSampleOnly(e.target.checked)}
           />
           <span>
-            <strong className="text-[var(--ink)]">Forzar modo demo</strong>
+            <strong className="text-[var(--ink)]">
+              Generar muestra ilustrativa (sin captura en vivo)
+            </strong>
             <span className="mt-1 block text-[var(--muted)]">
-              Genera el reporte SMID ilustrativo sin consumir Apify.
-              {!apifyConfigured &&
-                " Ahora mismo no hay APIFY_TOKEN en el entorno, así que el demo es la opción segura."}
-              {apifyConfigured &&
-                " Tu APIFY_TOKEN está configurado: desmarca esto para correr Actors de verdad."}
+              Ideal para revisar el formato del reporte SMID con datos de ejemplo.
+              {captureReady
+                ? " Desmárcalo para analizar señales publicitarias reales del periodo."
+                : " La captura en vivo se habilita cuando el entorno de producción esté configurado."}
             </span>
           </span>
         </label>
@@ -215,10 +215,10 @@ export function AnalysisForm({ apifyConfigured }: { apifyConfigured: boolean }) 
           disabled={!canSubmit}
           className="bg-[var(--ink)] px-5 py-3 text-sm font-semibold text-[var(--bg)] disabled:opacity-40"
         >
-          {loading ? "Iniciando…" : "Correr análisis y crear reporte"}
+          {loading ? "Iniciando análisis…" : "Generar reporte SMID"}
         </button>
         <p className="text-sm text-[var(--muted)]">
-          Flujo: inputs → Apify (o demo) → reporte SMID entregable
+          Briefing → análisis competitivo → reporte entregable
         </p>
       </div>
     </form>
