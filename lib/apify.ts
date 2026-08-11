@@ -54,7 +54,9 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
     };
   }
 
-  const media =
+  // Piloto: pocas URLs y poca concurrencia. Playwright con 6 homes
+  // en 1024 MB suele morir por OOM (proceso "Killed" en los logs).
+  const media = (
     input.pressMedia.length > 0
       ? input.pressMedia
       : [
@@ -62,13 +64,32 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
           "https://www.lostiempos.com/",
           "https://www.la-razon.com/",
           "https://www.opinion.com.bo/",
-        ];
+        ]
+  ).slice(0, 4);
 
   return {
     startUrls: media.map((url) => ({ url })),
-    maxCrawlPages: Math.min(media.length * 2, 20),
-    maxRequestsPerCrawl: Math.min(media.length * 2, 20),
+    maxCrawlPages: media.length,
+    maxRequestsPerCrawl: media.length,
+    // Cheerio/raw HTTP usa mucho menos RAM que Playwright.
+    crawlerType: "cheerio",
+    initialConcurrency: 1,
+    maxConcurrency: 1,
+    maxScrollHeightPixels: 0,
+    saveFiles: false,
+    saveScreenshots: false,
+    excludeUrlGlobs: ["/**/*.{png,jpg,jpeg,gif,svg,webp,css,woff,woff2}"],
   };
+}
+
+function memoryForSource(source: SourceKey) {
+  if (source === "press") {
+    return Number(process.env.APIFY_PRESS_MEMORY_MB || 4096);
+  }
+  if (source === "meta") {
+    return Number(process.env.APIFY_META_MEMORY_MB || 2048);
+  }
+  return Number(process.env.APIFY_GOOGLE_MEMORY_MB || 2048);
 }
 
 export async function startSourceRuns(
@@ -82,7 +103,7 @@ export async function startSourceRuns(
     const actorId = DEFAULT_ACTORS[source];
     try {
       const run = await client.actor(actorId).start(buildActorInput(source, input), {
-        memory: 1024,
+        memory: memoryForSource(source),
         timeout: 600,
       });
       refs.push({
