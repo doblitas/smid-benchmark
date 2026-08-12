@@ -240,14 +240,66 @@ function pickText(item: Record<string, unknown>, keys: string[]) {
   return "";
 }
 
+function mediumLabelFromUrl(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url.replace(/^https?:\/\//, "").replace(/\/$/, "") || "Medio digital";
+  }
+}
+
+function externalSovFromPress(
+  pressItems: Record<string, unknown>[],
+): ExternalSovRow[] {
+  const rows: ExternalSovRow[] = [];
+
+  for (const item of pressItems) {
+    if (typeof item.error === "string" && item.error) continue;
+    const url = typeof item.url === "string" ? item.url : "";
+    const medium = mediumLabelFromUrl(url);
+    const hits = Array.isArray(item.brandHits) ? item.brandHits : [];
+    const adSignals =
+      item.adSignals && typeof item.adSignals === "object"
+        ? (item.adSignals as Record<string, unknown>)
+        : {};
+    const slotBoost =
+      typeof adSignals.dataAdSlots === "number" ? adSignals.dataAdSlots : 0;
+
+    for (const hit of hits) {
+      if (!hit || typeof hit !== "object") continue;
+      const h = hit as Record<string, unknown>;
+      const brand = typeof h.brand === "string" ? h.brand : "";
+      if (!brand) continue;
+      const linkHits =
+        typeof h.linkOrImageHits === "number" ? h.linkOrImageHits : 0;
+      const appearances = Math.max(1, linkHits || (h.inHtml || h.inText ? 1 : 0));
+      const confidence: ExternalSovRow["confidence"] =
+        linkHits > 0 || h.inTitle ? "Media" : "Baja";
+
+      rows.push({
+        brand,
+        medium,
+        format: slotBoost > 0 ? "Banner / display" : "Mención / presencia",
+        appearances,
+        estimatedImpressions: appearances * 800 + slotBoost * 200,
+        confidence,
+      });
+    }
+  }
+
+  return rows.slice(0, 16);
+}
+
 export function buildLiveReport(
   input: AnalysisInput,
   datasets: Record<string, Record<string, unknown>[]>,
+  options?: { failedSources?: string[] },
 ): ReportData {
   const base = buildDemoReport(input);
   const metaItems = datasets.meta || [];
   const googleItems = datasets.google || [];
   const pressItems = datasets.press || [];
+  const failedSources = options?.failedSources || [];
 
   const liveThemes: ThemeRow[] = [];
   const allAds = [...metaItems, ...googleItems].slice(0, 20);
@@ -286,19 +338,34 @@ export function buildLiveReport(
     return { ...row, activeAds: count || row.activeAds };
   });
 
+  const liveExternal = externalSovFromPress(pressItems);
+  const pressOk = pressItems.filter((i) => !i.error).length;
+
+  const findings = [
+    `Señales observadas: Meta Ads ${metaItems.length}, Google Ads ${googleItems.length}, medios digitales ${pressOk}/${pressItems.length || 0}.`,
+    ...(failedSources.length > 0
+      ? [
+          `Cobertura parcial: sin datos útiles de ${failedSources.join(", ")}. El resto del reporte se mantiene.`,
+        ]
+      : []),
+    ...base.findings.slice(0, 3),
+  ];
+
   return {
     ...base,
     mode: "live",
     themes: liveThemes.length > 0 ? liveThemes.slice(0, 12) : base.themes,
+    externalSov: liveExternal.length > 0 ? liveExternal : base.externalSov,
     paidSov,
-    findings: [
-      `Señales observadas: Meta Ads ${metaItems.length}, Google Ads ${googleItems.length}, medios digitales ${pressItems.length}.`,
-      ...base.findings.slice(0, 3),
-    ],
+    findings,
     methodologyNotes: [
       "Análisis con captura del periodo. Las impresiones e inversión siguen siendo estimadas.",
-      `Volumen observado — Meta Ads: ${metaItems.length}. Google Ads: ${googleItems.length}. Medios digitales: ${pressItems.length}.`,
+      `Volumen observado — Meta Ads: ${metaItems.length}. Google Ads: ${googleItems.length}. Medios digitales: ${pressOk}.`,
+      "Medios digitales: escaneo liviano de homepages (menciones de marca y señales de display), no inventario auditado.",
       "Si alguna fuente devolvió poco volumen, conviene ampliar el periodo o revisar los anunciantes locales.",
+      ...(failedSources.length > 0
+        ? [`Fuentes sin datos en este corrido: ${failedSources.join(", ")}.`]
+        : []),
       ...base.methodologyNotes.filter((n) => !n.includes("muestra ilustrativa")),
     ],
   };

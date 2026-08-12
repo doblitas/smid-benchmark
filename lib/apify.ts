@@ -1,5 +1,6 @@
 import { ApifyClient } from "apify-client";
 import type { AnalysisInput, ActorRunRef, SourceKey } from "./types";
+import { pressMediaUrls } from "./press";
 
 export function hasApifyToken() {
   return Boolean(process.env.APIFY_TOKEN?.trim());
@@ -14,12 +15,10 @@ export function getApifyClient() {
 }
 
 /**
- * website-content-crawler NO es ideal para SMID prensa:
- * - Está pensado para extraer texto a LLMs/RAG, no para detectar banners.
- * - Por defecto usa Playwright y pide ~8 GB; con poca RAM muere ("Killed").
- *
- * Para el piloto de medios externos usamos cheerio-scraper (HTTP liviano)
- * y buscamos menciones de marca / señales publicitarias en el HTML.
+ * Defaults orientados a SMID:
+ * - Meta / Google: Actors especializados de Ad Library / Transparency.
+ * - Prensa vía Apify solo si PRESS_CAPTURE_MODE=apify (default es escaneo nativo en lib/press.ts).
+ *   cheerio-scraper evita Playwright/OOM del website-content-crawler.
  */
 const DEFAULT_ACTORS: Record<SourceKey, string> = {
   meta: process.env.APIFY_META_ACTOR_ID || "apify/facebook-ads-scraper",
@@ -30,11 +29,10 @@ const DEFAULT_ACTORS: Record<SourceKey, string> = {
 };
 
 function brandsForInput(input: AnalysisInput) {
-  return [input.clientBrand, ...input.competitors].map((b) => b.trim());
+  return [input.clientBrand, ...input.competitors].map((b) => b.trim()).filter(Boolean);
 }
 
 function buildPressPageFunction(brands: string[]) {
-  // pageFunction se envía como string al Actor Cheerio Scraper.
   const brandsJson = JSON.stringify(brands);
   return `async function pageFunction(context) {
   const { $, request, log } = context;
@@ -92,14 +90,20 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
   if (source === "meta") {
     return {
       country,
-      countries: [country],
+      countries: ["BO", country],
       searchTerms: brands,
       urls: brands.map(
         (brand) =>
           `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BO&q=${encodeURIComponent(brand)}&search_type=keyword_unordered`,
       ),
-      maxItems: 50,
-      maxAds: 50,
+      startUrls: brands.map(
+        (brand) =>
+          `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BO&q=${encodeURIComponent(brand)}&search_type=keyword_unordered`,
+      ),
+      maxItems: 40,
+      maxAds: 40,
+      resultsLimit: 40,
+      scrapeAdDetails: true,
     };
   }
 
@@ -107,23 +111,17 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
     return {
       queries: brands,
       advertisers: brands,
-      region: country,
-      country,
-      maxItems: 50,
+      searchTerms: brands,
+      region: "BO",
+      country: "BO",
+      countries: ["BO"],
+      maxItems: 40,
+      resultsLimit: 40,
+      maxAds: 40,
     };
   }
 
-  const media = (
-    input.pressMedia.length > 0
-      ? input.pressMedia
-      : [
-          "https://eldeber.com.bo/",
-          "https://www.lostiempos.com/",
-          "https://www.la-razon.com/",
-          "https://www.opinion.com.bo/",
-        ]
-  ).slice(0, 4);
-
+  const media = pressMediaUrls(input);
   const pressActor = DEFAULT_ACTORS.press;
 
   // Compatibilidad si alguien fuerza website-content-crawler por env.
@@ -142,7 +140,7 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
     };
   }
 
-  // Default: cheerio-scraper — liviano, sin browser, ~1024 MB alcanza.
+  // cheerio-scraper — liviano, sin browser.
   return {
     startUrls: media.map((url) => ({ url })),
     keepUrlFragments: false,
@@ -162,8 +160,9 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
 
 function memoryForSource(source: SourceKey) {
   if (source === "press") {
-    // Cheerio: 1024 basta. Si vuelven a WCC+Playwright, subir a 8192.
-    return Number(process.env.APIFY_PRESS_MEMORY_MB || 1024);
+    const pressActor = DEFAULT_ACTORS.press;
+    const defaultMb = pressActor.includes("website-content-crawler") ? 4096 : 1024;
+    return Number(process.env.APIFY_PRESS_MEMORY_MB || defaultMb);
   }
   if (source === "meta") {
     return Number(process.env.APIFY_META_MEMORY_MB || 2048);
@@ -171,39 +170,46 @@ function memoryForSource(source: SourceKey) {
   return Number(process.env.APIFY_GOOGLE_MEMORY_MB || 2048);
 }
 
+const TERMINAL = new Set(["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"]);
+
+export function isTerminalRunStatus(status: string) {
+  return TERMINAL.has(status);
+}
+
 export async function startSourceRuns(
   input: AnalysisInput,
   sources: SourceKey[],
 ): Promise<ActorRunRef[]> {
   const client = getApifyClient();
-  const refs: ActorRunRef[] = [];
 
-  for (const source of sources) {
-    const actorId = DEFAULT_ACTORS[source];
-    try {
-      const run = await client.actor(actorId).start(buildActorInput(source, input), {
-        memory: memoryForSource(source),
-        timeout: 600,
-      });
-      refs.push({
-        source,
-        actorId,
-        runId: run.id,
-        status: run.status || "READY",
-        datasetId: run.defaultDatasetId,
-      });
-    } catch (error) {
-      refs.push({
-        source,
-        actorId,
-        runId: "",
-        status: "FAILED",
-        error: error instanceof Error ? error.message : "No se pudo iniciar la fuente",
-      });
-    }
-  }
+  const started = await Promise.all(
+    sources.map(async (source): Promise<ActorRunRef> => {
+      const actorId = DEFAULT_ACTORS[source];
+      try {
+        const run = await client.actor(actorId).start(buildActorInput(source, input), {
+          memory: memoryForSource(source),
+          timeout: 600,
+        });
+        return {
+          source,
+          actorId,
+          runId: run.id,
+          status: run.status || "READY",
+          datasetId: run.defaultDatasetId,
+        };
+      } catch (error) {
+        return {
+          source,
+          actorId,
+          runId: "",
+          status: "FAILED",
+          error: error instanceof Error ? error.message : "No se pudo iniciar la fuente",
+        };
+      }
+    }),
+  );
 
-  return refs;
+  return started;
 }
 
 export async function refreshRuns(runs: ActorRunRef[]): Promise<ActorRunRef[]> {
@@ -212,16 +218,21 @@ export async function refreshRuns(runs: ActorRunRef[]): Promise<ActorRunRef[]> {
 
   return Promise.all(
     runs.map(async (run) => {
-      if (!run.runId || run.status === "FAILED") return run;
+      // Runs nativos o ya fallidos al iniciar no se consultan en Apify.
+      if (!run.runId || run.runId === "native" || run.status === "FAILED") return run;
       try {
         const fresh = await client.run(run.runId).get();
         if (!fresh) return run;
 
         let itemCount = run.itemCount;
         if (fresh.defaultDatasetId && fresh.status === "SUCCEEDED") {
-          const dataset = await client.dataset(fresh.defaultDatasetId).get();
-          if (dataset && typeof dataset.itemCount === "number") {
-            itemCount = dataset.itemCount;
+          try {
+            const dataset = await client.dataset(fresh.defaultDatasetId).get();
+            if (dataset && typeof dataset.itemCount === "number") {
+              itemCount = dataset.itemCount;
+            }
+          } catch {
+            // Conteo opcional: no tumbar el refresh.
           }
         }
 
@@ -245,4 +256,27 @@ export async function fetchDatasetItems(datasetId: string, limit = 100) {
   const client = getApifyClient();
   const { items } = await client.dataset(datasetId).listItems({ limit });
   return items as Record<string, unknown>[];
+}
+
+/** Descarga por fuente; fallo de una no afecta a las demás. */
+export async function fetchRunDatasets(
+  runs: ActorRunRef[],
+): Promise<Record<string, Record<string, unknown>[]>> {
+  const datasets: Record<string, Record<string, unknown>[]> = {};
+
+  await Promise.all(
+    runs.map(async (run) => {
+      if (run.status !== "SUCCEEDED" || !run.datasetId || run.runId === "native") {
+        if (!(run.source in datasets)) datasets[run.source] = [];
+        return;
+      }
+      try {
+        datasets[run.source] = await fetchDatasetItems(run.datasetId, 100);
+      } catch {
+        datasets[run.source] = [];
+      }
+    }),
+  );
+
+  return datasets;
 }

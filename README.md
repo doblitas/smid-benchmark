@@ -29,7 +29,10 @@ Abre: [http://127.0.0.1:3000/nuevo](http://127.0.0.1:3000/nuevo)
 
 Configuración opcional en `.env.local` (no visible en el producto):
 
-- `APIFY_TOKEN` — habilita captura en vivo
+- `APIFY_TOKEN` — habilita captura en vivo de Meta / Google
+- `PRESS_CAPTURE_MODE` — `native` (default, escaneo liviano de portales) o `apify`
 - `APIFY_*_ACTOR_ID` / `APIFY_*_MEMORY_MB` — ajuste fino de fuentes
+
+Si una fuente falla, el reporte se completa con el resto (cobertura parcial).
 
 Deploy: conectar el repo a Vercel y definir las variables de entorno en el proyecto.
