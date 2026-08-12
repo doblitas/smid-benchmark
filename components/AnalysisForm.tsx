@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 
 const DEFAULT_MEDIA = [
   "https://eldeber.com.bo/",
+  "https://eldeber.com.bo/automotores",
   "https://www.lostiempos.com/",
   "https://www.la-razon.com/",
   "https://www.opinion.com.bo/",

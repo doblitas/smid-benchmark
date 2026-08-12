@@ -23,9 +23,12 @@ export type PressScanItem = {
 
 const DEFAULT_MEDIA = [
   "https://eldeber.com.bo/",
+  "https://eldeber.com.bo/automotores",
   "https://www.lostiempos.com/",
   "https://www.la-razon.com/",
   "https://www.opinion.com.bo/",
+  "https://www.unitel.bo/",
+  "https://correodelsur.com/",
 ];
 
 function escapeRegExp(value: string) {
@@ -107,7 +110,7 @@ export function pressMediaUrls(input: AnalysisInput) {
   return media
     .map((u) => u.trim())
     .filter(Boolean)
-    .slice(0, 6);
+    .slice(0, 8);
 }
 
 /**

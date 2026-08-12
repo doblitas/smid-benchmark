@@ -144,8 +144,9 @@ async function continueLiveAnalysis(id: string) {
     );
     if (needsPoll) {
       const started = Date.now();
-      while (Date.now() - started < 90_000) {
-        await sleep(5000);
+      // Meta Ad Library suele necesitar varios minutos; 4.5 min máx en background.
+      while (Date.now() - started < 270_000) {
+        await sleep(8000);
         job = (await getJob(id))!;
         const refreshed = await refreshRuns(job.runs);
         job = {

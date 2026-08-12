@@ -87,20 +87,45 @@ function buildPressPageFunction(brands: string[]) {
 
 function buildGoogleTransparencyPageFunction(brands: string[]) {
   const brandsJson = JSON.stringify(brands);
-  // Ads Transparency es SPA: preferimos texto visible (Puppeteer) y filtramos basura JS.
   return `async function pageFunction(context) {
   const { request, log, page, $ } = context;
   const brands = ${brandsJson};
   const url = request.url;
   let title = '';
   let bodyText = '';
+  let cardTexts = [];
 
   if (page) {
     try {
-      await page.waitForSelector('body', { timeout: 15000 });
-      await new Promise((r) => setTimeout(r, 2500));
+      await page.waitForSelector('body', { timeout: 20000 });
+      await new Promise((r) => setTimeout(r, 4000));
+      // Scroll suave para forzar lazy content de Transparency.
+      await page.evaluate(async () => {
+        for (let i = 0; i < 4; i++) {
+          window.scrollBy(0, 700);
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        window.scrollTo(0, 0);
+      });
       title = await page.title();
-      bodyText = await page.evaluate(() => (document.body && document.body.innerText) || '');
+      const extracted = await page.evaluate(() => {
+        const junk = /gbar_|function\\s*\\(|\\{CONFIG:|window\\.|document\\./i;
+        const nodes = Array.from(document.querySelectorAll('div, span, p, a, li, h1, h2, h3'));
+        const texts = [];
+        for (const el of nodes) {
+          const t = (el.innerText || '').replace(/\\s+/g, ' ').trim();
+          if (t.length < 24 || t.length > 320) continue;
+          if (junk.test(t)) continue;
+          if (!/[a-záéíóúñ]/i.test(t)) continue;
+          texts.push(t);
+        }
+        return {
+          body: (document.body && document.body.innerText || '').slice(0, 25000),
+          cards: Array.from(new Set(texts)).slice(0, 30),
+        };
+      });
+      bodyText = extracted.body || '';
+      cardTexts = extracted.cards || [];
     } catch (err) {
       log.warning('Google transparency wait failed', { err: String(err) });
     }
@@ -112,22 +137,20 @@ function buildGoogleTransparencyPageFunction(brands: string[]) {
 
   bodyText = String(bodyText || '').replace(/\\s+/g, ' ').trim().slice(0, 20000);
   const brand =
-    brands.find((b) => new RegExp(b.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'), 'i').test(url + ' ' + bodyText)) ||
+    brands.find((b) => new RegExp(b.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'), 'i').test(url + ' ' + bodyText + ' ' + title)) ||
     brands[0] ||
     '';
 
   const looksLikeCode = (s) =>
     /gbar_|\\{CONFIG:|function\\s*\\(|window\\.|document\\.|googletag|\\};this\\.|<\\/?[a-z]|var\\s+\\w+\\s*=/i.test(s);
 
-  const snippets = bodyText
-    .split(/(?<=[.!?])\\s+|\\n+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 28 && s.length < 280 && !looksLikeCode(s))
+  const creatives = (cardTexts.length ? cardTexts : bodyText.split(/(?<=[.!?])\\s+|\\n+/))
+    .map((s) => String(s).trim())
+    .filter((s) => s.length > 24 && s.length < 280 && !looksLikeCode(s))
     .filter((s) => /[a-záéíóúñ]/i.test(s))
-    .slice(0, 8);
+    .slice(0, 12);
 
-  const cleanOffer = snippets[0] || '';
-  log.info('Google transparency page', { url, brand, snippets: snippets.length, hasCleanOffer: Boolean(cleanOffer) });
+  log.info('Google transparency page', { url, brand, creatives: creatives.length });
 
   return {
     platform: 'google',
@@ -135,10 +158,11 @@ function buildGoogleTransparencyPageFunction(brands: string[]) {
     title,
     advertiserName: brand,
     pageName: brand,
-    body: cleanOffer,
-    text: snippets.join(' · ').slice(0, 500),
-    headline: title && !looksLikeCode(title) ? title : brand + ' · Google Ads Transparency',
-    useful: Boolean(cleanOffer) || /ad|anuncio|advertiser|transparency/i.test(bodyText.slice(0, 500)),
+    creatives,
+    body: creatives[0] || '',
+    text: creatives.join(' · ').slice(0, 800),
+    headline: brand + ' · Google Ads Transparency',
+    useful: creatives.length > 0,
     capturedAt: new Date().toISOString(),
   };
 }`;
@@ -154,7 +178,7 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
     }));
     return {
       urls,
-      count: 40,
+      count: 60,
       scrapeAdDetails: true,
       "scrapePageAds.activeStatus": "active",
       "scrapePageAds.countryCode": "BO",

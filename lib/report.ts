@@ -1,8 +1,24 @@
+import { classifyThemes } from "./classify";
+import {
+  cpmFor,
+  daysInPeriod,
+  estimateContinuity,
+  estimateExternalImpressions,
+  estimatePaidImpressions,
+  estimateSpendFromImpressions,
+  parseKnownPriors,
+  pressureIndex,
+  publisherHost,
+  publisherMonthlyVisits,
+  confidenceForPaid,
+} from "./estimates";
+import { brandUniverse, normalizeAdDatasets } from "./normalize";
 import type {
   AnalysisInput,
   AnalysisJob,
   ExternalSovRow,
   PaidSovRow,
+  PressureIndexRow,
   ReportData,
   SpendRow,
   ThemeRow,
@@ -25,119 +41,92 @@ function scale(seed: number, min: number, max: number) {
   return min + (seed % (max - min + 1));
 }
 
+/** Solo muestra de formato — no usar en producción. */
 export function buildDemoReport(input: AnalysisInput): ReportData {
   const client = input.clientBrand;
   const competitor = primaryCompetitor(input);
-  const seed = hashSeed(`${client}-${competitor}-${input.periodLabel}`);
+  const seed = hashSeed(`${client}|${competitor}|${input.periodLabel}`);
+  const clientAds = scale(seed, 8, 18);
+  const compAds = scale(seed >> 2, 12, 28);
+  const days = daysInPeriod(input.periodLabel);
 
-  const clientPaidMeta = scale(seed, 900_000, 1_800_000);
-  const clientPaidGoogle = scale(seed >> 2, 300_000, 800_000);
-  const compPaidMeta = scale(seed >> 3, 1_800_000, 3_000_000);
-  const compPaidGoogle = scale(seed >> 4, 600_000, 1_200_000);
+  const themes: ThemeRow[] = [
+    {
+      brand: competitor,
+      campaign: "Financiamiento Creta",
+      theme: "Financiamiento",
+      product: "Creta",
+      offer: "Cuota desde USD 299",
+      platforms: "Meta",
+      confidence: "Media",
+    },
+    {
+      brand: competitor,
+      campaign: "Promoción · Bono USD 2.000",
+      theme: "Promoción",
+      product: "Tucson",
+      offer: "Bono USD 2.000",
+      platforms: "Meta, Google",
+      confidence: "Media",
+    },
+    {
+      brand: client,
+      campaign: "Test drive Sportage",
+      theme: "Test drive",
+      product: "Sportage",
+      offer: "Agendamiento online",
+      platforms: "Meta",
+      confidence: "Media",
+    },
+  ];
+
+  const externalSov: ExternalSovRow[] = [
+    {
+      brand: competitor,
+      medium: "eldeber.com.bo",
+      format: "Señal digital / mención",
+      appearances: 3,
+      estimatedImpressions: 180_000,
+      rangeLow: 100_000,
+      rangeHigh: 280_000,
+      confidence: "Baja",
+      note: "Muestra ilustrativa",
+    },
+    {
+      brand: client,
+      medium: "lostiempos.com",
+      format: "Señal digital / mención",
+      appearances: 2,
+      estimatedImpressions: 95_000,
+      rangeLow: 50_000,
+      rangeHigh: 150_000,
+      confidence: "Baja",
+      note: "Muestra ilustrativa",
+    },
+  ];
 
   const paidSov: PaidSovRow[] = [
     {
       brand: competitor,
       platform: "Meta Ads",
-      activeAds: scale(seed, 12, 24),
-      continuity: scale(seed, 75, 95),
-      estimatedImpressions: compPaidMeta,
-    },
-    {
-      brand: competitor,
-      platform: "Google Ads",
-      activeAds: scale(seed >> 1, 6, 14),
-      continuity: scale(seed >> 1, 45, 75),
-      estimatedImpressions: compPaidGoogle,
+      activeAds: compAds,
+      continuity: 78,
+      activitySharePct: Math.round((compAds / (compAds + clientAds)) * 100),
+      estimatedImpressions: 2_200_000,
+      rangeLow: 1_300_000,
+      rangeHigh: 3_400_000,
+      confidence: "Baja",
     },
     {
       brand: client,
       platform: "Meta Ads",
-      activeAds: scale(seed >> 2, 8, 16),
-      continuity: scale(seed >> 2, 55, 85),
-      estimatedImpressions: clientPaidMeta,
-    },
-    {
-      brand: client,
-      platform: "Google Ads",
-      activeAds: scale(seed >> 3, 4, 10),
-      continuity: scale(seed >> 3, 35, 65),
-      estimatedImpressions: clientPaidGoogle,
-    },
-  ];
-
-  const media =
-    input.pressMedia.length > 0
-      ? input.pressMedia.map((m) => m.replace(/^https?:\/\//, "").replace(/\/$/, ""))
-      : ["El Deber", "Los Tiempos", "La Razón", "Opinión"];
-
-  const externalSov: ExternalSovRow[] = [
-    {
-      brand: competitor,
-      medium: media[0] || "El Deber",
-      format: "Banner web",
-      appearances: 12,
-      estimatedImpressions: 10_000,
-      confidence: "Media",
-    },
-    {
-      brand: competitor,
-      medium: media[1] || "Los Tiempos",
-      format: "Home / sección",
-      appearances: 8,
-      estimatedImpressions: 7_200,
-      confidence: "Media",
-    },
-    {
-      brand: client,
-      medium: media[0] || "El Deber",
-      format: "Banner web",
-      appearances: 7,
-      estimatedImpressions: 6_100,
-      confidence: "Media",
-    },
-    {
-      brand: client,
-      medium: media[2] || "La Razón",
-      format: "Display",
-      appearances: 6,
-      estimatedImpressions: 5_400,
+      activeAds: clientAds,
+      continuity: 65,
+      activitySharePct: Math.round((clientAds / (compAds + clientAds)) * 100),
+      estimatedImpressions: 1_400_000,
+      rangeLow: 800_000,
+      rangeHigh: 2_200_000,
       confidence: "Baja",
-    },
-  ];
-
-  const themes: ThemeRow[] = [
-    {
-      brand: competitor,
-      campaign: "Oferta de temporada",
-      theme: "Promoción",
-      product: `${competitor} SUV`,
-      offer: "Bono USD 2.000",
-      platforms: "Meta, Google Display",
-    },
-    {
-      brand: competitor,
-      campaign: "Financiamiento",
-      theme: "Financiamiento",
-      product: `${competitor} crossover`,
-      offer: "Cuota desde USD 299",
-      platforms: "Meta video",
-    },
-    {
-      brand: client,
-      campaign: "Lanzamiento / producto",
-      theme: "Lanzamiento",
-      product: `${client} nuevo modelo`,
-      offer: "Test drive + bono",
-      platforms: "Meta, YouTube",
-    },
-    {
-      brand: client,
-      campaign: "Agenda tu test drive",
-      theme: "Test drive",
-      product: `${client} línea principal`,
-      offer: "Agendamiento online",
-      platforms: "Meta",
     },
   ];
 
@@ -145,352 +134,317 @@ export function buildDemoReport(input: AnalysisInput): ReportData {
     {
       brand: competitor,
       platform: "Meta Ads",
-      estimatedSpendUsd: Math.round((compPaidMeta / 1000) * 4),
-      rangeLow: Math.round((compPaidMeta / 1000) * 2.5),
-      rangeHigh: Math.round((compPaidMeta / 1000) * 6),
-      confidence: "Media",
-    },
-    {
-      brand: competitor,
-      platform: "Google Ads",
-      estimatedSpendUsd: Math.round((compPaidGoogle / 1000) * 5),
-      rangeLow: Math.round((compPaidGoogle / 1000) * 3),
-      rangeHigh: Math.round((compPaidGoogle / 1000) * 8),
+      estimatedSpendUsd: 9_500,
+      rangeLow: 5_500,
+      rangeHigh: 14_500,
+      cpmUsed: 3,
       confidence: "Baja",
     },
     {
       brand: client,
       platform: "Meta Ads",
-      estimatedSpendUsd: Math.round((clientPaidMeta / 1000) * 4),
-      rangeLow: Math.round((clientPaidMeta / 1000) * 2.5),
-      rangeHigh: Math.round((clientPaidMeta / 1000) * 6),
-      confidence: "Media",
-    },
-    {
-      brand: client,
-      platform: "Google Ads",
-      estimatedSpendUsd: Math.round((clientPaidGoogle / 1000) * 5),
-      rangeLow: Math.round((clientPaidGoogle / 1000) * 3),
-      rangeHigh: Math.round((clientPaidGoogle / 1000) * 8),
+      estimatedSpendUsd: 5_800,
+      rangeLow: 3_200,
+      rangeHigh: 9_000,
+      cpmUsed: 3,
       confidence: "Baja",
     },
   ];
-
-  const clientExternal = externalSov
-    .filter((r) => r.brand === client)
-    .reduce((a, b) => a + b.estimatedImpressions, 0);
-  const compExternal = externalSov
-    .filter((r) => r.brand === competitor)
-    .reduce((a, b) => a + b.estimatedImpressions, 0);
-  const extTotal = clientExternal + compExternal || 1;
-
-  const clientPaid = clientPaidMeta + clientPaidGoogle;
-  const compPaid = compPaidMeta + compPaidGoogle;
-  const paidTotal = clientPaid + compPaid || 1;
-
-  const clientSpendTotal = spend
-    .filter((s) => s.brand === client)
-    .reduce((a, b) => a + b.estimatedSpendUsd, 0);
-  const competitorSpendTotal = spend
-    .filter((s) => s.brand === competitor)
-    .reduce((a, b) => a + b.estimatedSpendUsd, 0);
 
   return {
     generatedAt: new Date().toISOString(),
     mode: "demo",
     input,
     summary: {
-      clientShareExternal: Math.round((clientExternal / extTotal) * 100),
-      competitorShareExternal: Math.round((compExternal / extTotal) * 100),
-      clientSharePaid: Math.round((clientPaid / paidTotal) * 100),
-      competitorSharePaid: Math.round((compPaid / paidTotal) * 100),
-      clientSpendTotal,
-      competitorSpendTotal,
+      clientShareExternal: 35,
+      competitorShareExternal: 65,
+      clientSharePaid: 39,
+      competitorSharePaid: 61,
+      clientActivitySharePaid: Math.round((clientAds / (compAds + clientAds)) * 100),
+      competitorActivitySharePaid: Math.round(
+        (compAds / (compAds + clientAds)) * 100,
+      ),
+      clientSpendTotal: 5_800,
+      competitorSpendTotal: 9_500,
+      clientPressure: 48,
+      competitorPressure: 72,
+      hasSpendEstimate: true,
+      hasExternalEstimate: true,
+      hasPaidEstimate: true,
     },
     themes,
     externalSov,
     paidSov,
     spend,
+    pressureIndex: [
+      { brand: competitor, score: 72, label: "Alta presión observada" },
+      { brand: client, score: 48, label: "Presión media observada" },
+    ],
     findings: [
-      `${competitor} concentra más continuidad en promoción y financiamiento.`,
-      `${client} puede ganar con lanzamiento/test drive si sostiene presencia en Meta y Search.`,
-      "Priorizar publishers con mayor SOV externo estimado en el próximo mes.",
-      input.knownData
-        ? `Se incorporó contexto del usuario: ${input.knownData.slice(0, 180)}`
-        : "No se cargaron datos propios adicionales en este corrido.",
+      "Muestra ilustrativa del formato SMID — no usar para decisiones.",
+      `${days} días de periodo de referencia en el modelo.`,
     ],
     methodologyNotes: [
-      "Impresiones e inversión son estimaciones con rango, no cifras auditadas.",
-      "Esta es una muestra ilustrativa del formato de entregable SMID.",
-      `Fuentes seleccionadas: ${input.sources
-        .map((s) =>
-          s === "meta" ? "Meta Ads" : s === "google" ? "Google Ads" : "Medios digitales",
-        )
-        .join(", ")}.`,
-      `País: ${input.country}. Categoría: ${input.category}. Periodo: ${input.periodLabel}.`,
+      "Este modo demo no refleja captura real.",
+      "En producción se usa actividad observada + estimaciones documentadas.",
     ],
   };
 }
 
-function looksLikeCodeOrJunk(text: string) {
-  return /gbar_|\{CONFIG:|function\s*\(|window\.|document\.|googletag|;this\.|<\/?[a-z]|var\s+\w+\s*=|ObjectMultiplex/i.test(
-    text,
-  );
-}
-
-function pickText(item: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = item[key];
-    if (typeof value === "string" && value.trim()) {
-      const trimmed = value.trim();
-      if (looksLikeCodeOrJunk(trimmed)) continue;
-      return trimmed;
-    }
-  }
-  return "";
-}
-
-function isUsefulAdItem(item: Record<string, unknown>) {
-  if (item.useful === false) return false;
-  if (typeof item.error === "string" && item.error) return false;
-  const body = pickText(item, [
-    "ad_text",
-    "body",
-    "text",
-    "snapshotBody",
-    "title",
-    "headline",
-    "adCreativeBody",
-    "snapshot.body",
-  ]);
-  const brand = pickText(item, [
-    "pageName",
-    "advertiser",
-    "advertiserName",
-    "name",
-    "page_name",
-  ]);
-  // Meta Ad Library suele traer snapshot / adArchiveID aunque el copy sea corto.
-  const hasMetaShape = Boolean(
-    item.adArchiveID ||
-      item.ad_archive_id ||
-      item.snapshot ||
-      item.card ||
-      item.cards,
-  );
-  return Boolean(body || hasMetaShape || (brand && item.platform === "google" && item.useful));
-}
-
-function mediumLabelFromUrl(url: string) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return url.replace(/^https?:\/\//, "").replace(/\/$/, "") || "Medio digital";
-  }
-}
-
 function externalSovFromPress(
   pressItems: Record<string, unknown>[],
+  brands: string[],
 ): ExternalSovRow[] {
   const rows: ExternalSovRow[] = [];
 
   for (const item of pressItems) {
     if (typeof item.error === "string" && item.error) continue;
     const url = typeof item.url === "string" ? item.url : "";
-    const medium = mediumLabelFromUrl(url);
+    const medium = publisherHost(url);
     const hits = Array.isArray(item.brandHits) ? item.brandHits : [];
     const adSignals =
       item.adSignals && typeof item.adSignals === "object"
         ? (item.adSignals as Record<string, unknown>)
         : {};
-    const slotBoost =
-      typeof adSignals.dataAdSlots === "number" ? adSignals.dataAdSlots : 0;
+    const adLike =
+      Boolean(adSignals.adsenseLike) ||
+      (typeof adSignals.dataAdSlots === "number" && adSignals.dataAdSlots > 2) ||
+      (typeof adSignals.iframeCount === "number" && adSignals.iframeCount > 0);
 
-    for (const hit of hits) {
-      if (!hit || typeof hit !== "object") continue;
+    const relevantHits = hits.filter((hit) => {
+      if (!hit || typeof hit !== "object") return false;
+      const brand = typeof (hit as { brand?: string }).brand === "string"
+        ? (hit as { brand: string }).brand
+        : "";
+      return brands.some((b) => b.toLowerCase() === brand.toLowerCase());
+    });
+
+    const competitiveOnMedium = relevantHits.length;
+
+    for (const hit of relevantHits) {
       const h = hit as Record<string, unknown>;
-      const brand = typeof h.brand === "string" ? h.brand : "";
-      if (!brand) continue;
-      const linkHits =
-        typeof h.linkOrImageHits === "number" ? h.linkOrImageHits : 0;
-      const appearances = Math.max(1, linkHits || (h.inHtml || h.inText ? 1 : 0));
-      const confidence: ExternalSovRow["confidence"] =
-        linkHits > 0 || h.inTitle ? "Media" : "Baja";
+      const brand = String(h.brand || "");
+      const linkHits = typeof h.linkOrImageHits === "number" ? h.linkOrImageHits : 0;
+      const appearances = Math.max(1, linkHits || 1);
+      const inTitle = Boolean(h.inTitle);
+      const est = estimateExternalImpressions({
+        monthlyVisits: publisherMonthlyVisits(url || medium),
+        brandAppearances: appearances,
+        competitiveAppearancesOnMedium: Math.max(competitiveOnMedium, 1),
+        adLike,
+        inTitle,
+      });
 
       rows.push({
         brand,
         medium,
-        format: slotBoost > 0 ? "Banner / display" : "Mención / presencia",
+        format: adLike
+          ? "Señal publicitaria / inventario digital"
+          : inTitle
+            ? "Titular / home"
+            : "Mención en página",
         appearances,
-        estimatedImpressions: appearances * 800 + slotBoost * 200,
-        confidence,
+        estimatedImpressions: est.mid,
+        rangeLow: est.low,
+        rangeHigh: est.high,
+        confidence: est.confidence,
+        note: adLike
+          ? "Proxy con señales de inventario publicitario en el HTML"
+          : "Mención de marca (puede ser editorial; no equivale a banner pagado confirmado)",
       });
     }
   }
 
-  return rows.slice(0, 16);
+  // Agregar por marca+medio
+  const merged = new Map<string, ExternalSovRow>();
+  for (const row of rows) {
+    const key = `${row.brand}|${row.medium}`;
+    const prev = merged.get(key);
+    if (!prev) {
+      merged.set(key, row);
+      continue;
+    }
+    merged.set(key, {
+      ...prev,
+      appearances: prev.appearances + row.appearances,
+      estimatedImpressions: prev.estimatedImpressions + row.estimatedImpressions,
+      rangeLow: prev.rangeLow + row.rangeLow,
+      rangeHigh: prev.rangeHigh + row.rangeHigh,
+      format: prev.format.includes("publicitaria") ? prev.format : row.format,
+      confidence:
+        prev.confidence === "Media" || row.confidence === "Media"
+          ? "Media"
+          : "Baja",
+    });
+  }
+
+  return [...merged.values()]
+    .sort((a, b) => b.estimatedImpressions - a.estimatedImpressions)
+    .slice(0, 20);
 }
 
+function sharePct(part: number, total: number) {
+  if (total <= 0) return 0;
+  return Math.round((part / total) * 100);
+}
+
+/**
+ * Reporte SMID en vivo:
+ * - Capa A observada: anuncios, temáticas, apariciones en medios
+ * - Capa B estimada: impresiones e inversión con modelo BO documentado
+ * Nunca rellena cifras si no hay señales útiles.
+ */
 export function buildLiveReport(
   input: AnalysisInput,
   datasets: Record<string, Record<string, unknown>[]>,
   options?: { failedSources?: string[] },
 ): ReportData {
-  const metaRaw = datasets.meta || [];
-  const googleRaw = datasets.google || [];
-  const pressItems = datasets.press || [];
-  const metaItems = metaRaw.filter(isUsefulAdItem);
-  const googleItems = googleRaw.filter(isUsefulAdItem);
   const failedSources = options?.failedSources || [];
-  const hasAnySignal =
-    metaItems.length > 0 ||
-    googleItems.length > 0 ||
-    pressItems.some((i) => {
-      if (i.error) return false;
-      const hits = Array.isArray(i.brandHits) ? i.brandHits : [];
-      return hits.length > 0;
-    });
-
+  const brands = brandUniverse(input);
   const client = input.clientBrand;
-  const competitor = input.competitors[0] || "Competidor";
-  const brandPattern = (name: string) =>
-    new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const competitor = primaryCompetitor(input);
+  const days = daysInPeriod(input.periodLabel);
+  const priors = parseKnownPriors(input.knownData);
 
-  const liveThemes: ThemeRow[] = [];
-  const allAds = [...metaItems, ...googleItems].slice(0, 20);
+  const { meta, google, all } = normalizeAdDatasets(input, datasets);
+  const pressItems = datasets.press || [];
+  const themes = classifyThemes(all);
+  const externalSov = externalSovFromPress(pressItems, brands);
 
-  for (const item of allAds) {
-    const body = pickText(item, [
-      "ad_text",
-      "body",
-      "text",
-      "snapshotBody",
-      "adCreativeBody",
-      "title",
-      "headline",
-    ]);
-    const brandGuess =
-      pickText(item, ["pageName", "advertiser", "advertiserName", "name", "page_name"]) ||
-      (brandPattern(client).test(JSON.stringify(item).slice(0, 800))
-        ? client
-        : competitor);
+  const countAds = (platform: "Meta" | "Google", brand: string) =>
+    all.filter(
+      (a) =>
+        a.platform === platform &&
+        a.brand.toLowerCase() === brand.toLowerCase(),
+    ).length;
 
-    if (!body && !brandGuess) continue;
+  const focusBrands = [client, competitor].filter(Boolean);
+  const paidSov: PaidSovRow[] = [];
+  const spend: SpendRow[] = [];
 
-    liveThemes.push({
-      brand: brandGuess,
-      campaign: pickText(item, ["campaign", "cta"]) || "Campaña detectada",
-      theme: "Otros",
-      product: brandGuess,
-      offer: body.slice(0, 80) || "Sin oferta explícita",
-      platforms: metaItems.includes(item) ? "Meta" : "Google",
-    });
+  for (const brand of focusBrands) {
+    for (const platform of ["Meta Ads", "Google Ads"] as const) {
+      const key = platform.startsWith("Meta") ? "meta" : "google";
+      const activeAds = countAds(platform.startsWith("Meta") ? "Meta" : "Google", brand);
+      if (activeAds <= 0) continue;
+
+      const continuity = estimateContinuity(activeAds, days);
+      const impressions = estimatePaidImpressions({
+        activeAds,
+        continuityPct: continuity,
+        days,
+        platform: key,
+      });
+      const { band, confidenceBoost } = cpmFor(key, input);
+      const money = estimateSpendFromImpressions(impressions, band);
+      const conf = confidenceForPaid(activeAds, confidenceBoost);
+
+      paidSov.push({
+        brand,
+        platform,
+        activeAds,
+        continuity,
+        activitySharePct: 0, // se completa abajo
+        estimatedImpressions: impressions.mid,
+        rangeLow: impressions.low,
+        rangeHigh: impressions.high,
+        confidence: conf,
+      });
+
+      spend.push({
+        brand,
+        platform,
+        estimatedSpendUsd: money.mid,
+        rangeLow: money.low,
+        rangeHigh: money.high,
+        cpmUsed: band.mid,
+        confidence: conf,
+      });
+    }
   }
 
-  const liveExternal = externalSovFromPress(pressItems);
-  const pressOk = pressItems.filter((i) => !i.error).length;
-  const pressMentions = liveExternal.length;
+  const totalActive = paidSov.reduce((a, r) => a + r.activeAds, 0) || 1;
+  for (const row of paidSov) {
+    row.activitySharePct = sharePct(row.activeAds, totalActive);
+  }
 
-  const metaCount = metaItems.length;
-  const googleCount = googleItems.length;
-
-  const countForBrand = (
-    items: Record<string, unknown>[],
-    brand: string,
-  ) =>
-    items.filter((item) => {
-      const blob = [
-        pickText(item, ["pageName", "advertiser", "advertiserName", "name", "page_name"]),
-        pickText(item, ["body", "text", "title", "headline"]),
-        typeof item.url === "string" ? item.url : "",
-      ].join(" ");
-      return brandPattern(brand).test(blob);
-    }).length;
-
-  const clientMeta = countForBrand(metaItems, client);
-  const clientGoogle = countForBrand(googleItems, client);
-  const compMeta = countForBrand(metaItems, competitor);
-  const compGoogle = countForBrand(googleItems, competitor);
-
-  const metaMatched = clientMeta + compMeta;
-  const googleMatched = clientGoogle + compGoogle;
-  const metaClientFinal =
-    metaMatched === 0 && metaCount > 0 ? Math.round(metaCount / 2) : clientMeta;
-  const metaCompFinal =
-    metaMatched === 0 && metaCount > 0
-      ? metaCount - metaClientFinal
-      : compMeta;
-  const googleClientFinal =
-    googleMatched === 0 && googleCount > 0
-      ? Math.round(googleCount / 2)
-      : clientGoogle;
-  const googleCompFinal =
-    googleMatched === 0 && googleCount > 0
-      ? googleCount - googleClientFinal
-      : compGoogle;
-
-  const paidSov: PaidSovRow[] =
-    metaCount + googleCount > 0
-      ? [
-          {
-            brand: competitor,
-            platform: "Meta Ads",
-            activeAds: metaCompFinal,
-            continuity: metaCompFinal > 0 ? 70 : 0,
-            estimatedImpressions: metaCompFinal * 50_000,
-          },
-          {
-            brand: competitor,
-            platform: "Google Ads",
-            activeAds: googleCompFinal,
-            continuity: googleCompFinal > 0 ? 55 : 0,
-            estimatedImpressions: googleCompFinal * 40_000,
-          },
-          {
-            brand: client,
-            platform: "Meta Ads",
-            activeAds: metaClientFinal,
-            continuity: metaClientFinal > 0 ? 60 : 0,
-            estimatedImpressions: metaClientFinal * 50_000,
-          },
-          {
-            brand: client,
-            platform: "Google Ads",
-            activeAds: googleClientFinal,
-            continuity: googleClientFinal > 0 ? 45 : 0,
-            estimatedImpressions: googleClientFinal * 40_000,
-          },
-        ].filter((r) => r.activeAds > 0)
-      : [];
-
-  const clientPaid = paidSov
+  const clientPaidImp = paidSov
     .filter((r) => r.brand === client)
     .reduce((a, b) => a + b.estimatedImpressions, 0);
-  const compPaid = paidSov
+  const compPaidImp = paidSov
     .filter((r) => r.brand === competitor)
     .reduce((a, b) => a + b.estimatedImpressions, 0);
-  const paidImpTotal = clientPaid + compPaid || 1;
+  const paidImpTotal = clientPaidImp + compPaidImp;
 
-  const clientExt = liveExternal
-    .filter((r) => r.brand === client)
+  const clientExtImp = externalSov
+    .filter((r) => r.brand.toLowerCase() === client.toLowerCase())
     .reduce((a, b) => a + b.estimatedImpressions, 0);
-  const compExt = liveExternal
-    .filter((r) => r.brand === competitor)
+  const compExtImp = externalSov
+    .filter((r) => r.brand.toLowerCase() === competitor.toLowerCase())
     .reduce((a, b) => a + b.estimatedImpressions, 0);
-  const extTotal = clientExt + compExt || 1;
+  const extTotal = clientExtImp + compExtImp;
 
-  const spend: SpendRow[] = paidSov.map((row) => {
-    const cpm = row.platform.startsWith("Meta") ? 4 : 5;
-    const mid = Math.round((row.estimatedImpressions / 1000) * cpm);
-    return {
-      brand: row.brand,
-      platform: row.platform,
-      estimatedSpendUsd: mid,
-      rangeLow: Math.round(mid * 0.6),
-      rangeHigh: Math.round(mid * 1.5),
-      confidence: row.activeAds > 0 ? "Media" : "Baja",
-    };
+  const clientAdsTotal = all.filter(
+    (a) => a.brand.toLowerCase() === client.toLowerCase(),
+  ).length;
+  const compAdsTotal = all.filter(
+    (a) => a.brand.toLowerCase() === competitor.toLowerCase(),
+  ).length;
+  const adsTotal = clientAdsTotal + compAdsTotal || 1;
+
+  const clientExtShare = sharePct(clientExtImp, extTotal);
+  const compExtShare = sharePct(compExtImp, extTotal);
+
+  const clientThemes = new Set(
+    themes.filter((t) => t.brand.toLowerCase() === client.toLowerCase()).map((t) => t.theme),
+  ).size;
+  const compThemes = new Set(
+    themes
+      .filter((t) => t.brand.toLowerCase() === competitor.toLowerCase())
+      .map((t) => t.theme),
+  ).size;
+
+  const clientPressure = pressureIndex({
+    adShare: sharePct(clientAdsTotal, adsTotal),
+    continuity:
+      paidSov
+        .filter((r) => r.brand === client)
+        .reduce((a, b) => Math.max(a, b.continuity), 0) || 0,
+    creativeDiversity: Math.min(100, clientThemes * 22 + clientAdsTotal * 3),
+    externalShare: clientExtShare,
   });
+  const competitorPressure = pressureIndex({
+    adShare: sharePct(compAdsTotal, adsTotal),
+    continuity:
+      paidSov
+        .filter((r) => r.brand === competitor)
+        .reduce((a, b) => Math.max(a, b.continuity), 0) || 0,
+    creativeDiversity: Math.min(100, compThemes * 22 + compAdsTotal * 3),
+    externalShare: compExtShare,
+  });
+
+  const pressureIndexRows: PressureIndexRow[] = [
+    {
+      brand: competitor,
+      score: competitorPressure,
+      label:
+        competitorPressure >= 65
+          ? "Alta presión publicitaria observada"
+          : competitorPressure >= 40
+            ? "Presión media observada"
+            : "Presión baja / poca evidencia",
+    },
+    {
+      brand: client,
+      score: clientPressure,
+      label:
+        clientPressure >= 65
+          ? "Alta presión publicitaria observada"
+          : clientPressure >= 40
+            ? "Presión media observada"
+            : "Presión baja / poca evidencia",
+    },
+  ];
 
   const clientSpendTotal = spend
     .filter((s) => s.brand === client)
@@ -499,47 +453,109 @@ export function buildLiveReport(
     .filter((s) => s.brand === competitor)
     .reduce((a, b) => a + b.estimatedSpendUsd, 0);
 
+  const hasPaidEstimate = paidSov.length > 0;
+  const hasExternalEstimate = externalSov.length > 0;
+  const hasSpendEstimate = spend.length > 0;
+  const pressOk = pressItems.filter((i) => !i.error).length;
+
+  const findings: string[] = [];
+
+  if (compAdsTotal > clientAdsTotal && hasPaidEstimate) {
+    findings.push(
+      `${competitor} muestra más creatividades activas observadas (${compAdsTotal} vs ${clientAdsTotal} de ${client}) en Meta/Google.`,
+    );
+  } else if (clientAdsTotal > compAdsTotal && hasPaidEstimate) {
+    findings.push(
+      `${client} lidera en creatividades activas observadas (${clientAdsTotal} vs ${compAdsTotal} de ${competitor}).`,
+    );
+  }
+
+  const topCompetitorTheme = themes.find(
+    (t) => t.brand.toLowerCase() === competitor.toLowerCase(),
+  );
+  if (topCompetitorTheme) {
+    findings.push(
+      `${competitor} comunica principalmente “${topCompetitorTheme.theme}”` +
+        (topCompetitorTheme.offer && topCompetitorTheme.offer !== "Sin oferta explícita"
+          ? ` con oferta/ángulo: ${topCompetitorTheme.offer}.`
+          : "."),
+    );
+  }
+
+  if (hasExternalEstimate) {
+    findings.push(
+      `En medios digitales, SOV estimado de impresiones ${client}/${competitor}: ${clientExtShare}% / ${compExtShare}% (proxy con tráfico de publishers y muestra de home).`,
+    );
+  } else if (pressOk > 0) {
+    findings.push(
+      `Se escanearon ${pressOk} medios digitales sin menciones claras de ${client}/${competitor} en home. El SOV externo queda sin base en esta muestra.`,
+    );
+  }
+
+  if (competitorPressure > clientPressure + 10) {
+    findings.push(
+      `Índice de presión publicitaria (actividad observada): ${competitor} ${competitorPressure} vs ${client} ${clientPressure}. No equivale a inversión real.`,
+    );
+  }
+
+  if (failedSources.length > 0) {
+    findings.push(
+      `Sin datos útiles de: ${failedSources.join(", ")}. No se inventaron métricas de relleno.`,
+    );
+  }
+
+  if (!hasPaidEstimate && !hasExternalEstimate) {
+    findings.push(
+      "No hubo señales publicitarias útiles en este corrido. Revisa Meta Ad Library / Transparency o amplía medios y vuelve a generar.",
+    );
+  } else {
+    findings.push(
+      "Impresiones e inversión son estimaciones del modelo piloto Bolivia (brief SMID). Úsalas como orden de magnitud, no como dato auditado.",
+    );
+  }
+
+  if (priors.notes.length) {
+    findings.push(...priors.notes);
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     mode: "live",
     input,
     summary: {
-      clientShareExternal: liveExternal.length
-        ? Math.round((clientExt / extTotal) * 100)
-        : 0,
-      competitorShareExternal: liveExternal.length
-        ? Math.round((compExt / extTotal) * 100)
-        : 0,
-      clientSharePaid: metaCount + googleCount > 0
-        ? Math.round((clientPaid / paidImpTotal) * 100)
-        : 0,
-      competitorSharePaid: metaCount + googleCount > 0
-        ? Math.round((compPaid / paidImpTotal) * 100)
-        : 0,
-      clientSpendTotal: metaCount + googleCount > 0 ? clientSpendTotal : 0,
-      competitorSpendTotal: metaCount + googleCount > 0 ? competitorSpendTotal : 0,
+      clientShareExternal: hasExternalEstimate ? clientExtShare : 0,
+      competitorShareExternal: hasExternalEstimate ? compExtShare : 0,
+      clientSharePaid: hasPaidEstimate ? sharePct(clientPaidImp, paidImpTotal) : 0,
+      competitorSharePaid: hasPaidEstimate ? sharePct(compPaidImp, paidImpTotal) : 0,
+      clientActivitySharePaid: sharePct(clientAdsTotal, adsTotal),
+      competitorActivitySharePaid: sharePct(compAdsTotal, adsTotal),
+      clientSpendTotal: hasSpendEstimate ? clientSpendTotal : 0,
+      competitorSpendTotal: hasSpendEstimate ? competitorSpendTotal : 0,
+      clientPressure,
+      competitorPressure,
+      hasSpendEstimate,
+      hasExternalEstimate,
+      hasPaidEstimate,
     },
-    themes: liveThemes.slice(0, 12),
-    externalSov: liveExternal,
+    themes,
+    externalSov,
     paidSov,
     spend,
-    findings: [
-      `Señales útiles: Meta Ads ${metaCount}/${metaRaw.length}, Google Ads ${googleCount}/${googleRaw.length}, medios con mención ${pressMentions} (páginas ${pressOk}).`,
-      ...(failedSources.length > 0
-        ? [
-            `Sin datos útiles de: ${failedSources.join(", ")}. No se inventaron cifras de relleno.`,
-          ]
-        : []),
-      !hasAnySignal
-        ? "No hubo captura útil en este corrido. Revisa el acceso de captura en producción y vuelve a generar el análisis."
-        : "Las impresiones e inversión son estimaciones a partir de la actividad observada.",
-    ],
+    pressureIndex: pressureIndexRows,
+    findings,
     methodologyNotes: [
-      "Solo se reportan métricas derivadas de señales realmente capturadas en este periodo.",
-      `Volumen útil — Meta Ads: ${metaCount}. Google Ads: ${googleCount}. Medios con mención: ${pressMentions}.`,
-      ...(failedSources.length > 0
-        ? [`Fuentes sin datos: ${failedSources.join(", ")}.`]
+      "Capa observada: anuncios activos (Meta Ad Library / Google Transparency) + apariciones/menciones en portales.",
+      "Capa estimada paid: anuncios × continuidad proxy × impresiones/día por anuncio (hipótesis BO automotriz) × CPM local.",
+      "Capa estimada externa: visitas/mes proxy del publisher × cobertura de muestra homepage × share de marca × factor de formato.",
+      `Periodo modelado: ${days} días (${input.periodLabel || "mensual"}). País: ${input.country}.`,
+      `Señales útiles — Meta: ${meta.length}. Google: ${google.length}. Medios con mención: ${externalSov.length} filas / ${pressOk} páginas OK.`,
+      "El índice de presión es actividad observada (0–100), no presupuesto.",
+      ...(failedSources.length
+        ? [`Fuentes incompletas: ${failedSources.join(", ")}.`]
         : []),
+      ...(input.knownData
+        ? ["Se incorporaron priors del briefing cuando fue posible parsear CPM."]
+        : ["Sin CPM propio en el briefing → se usaron bandas piloto Meta 1.5–5 / Google 2.5–9 USD."]),
     ],
   };
 }
