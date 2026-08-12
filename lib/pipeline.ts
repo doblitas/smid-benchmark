@@ -8,6 +8,7 @@ import {
 import { scanPressMedia, useNativePressCapture } from "./press";
 import { appendLog, buildDemoReport, buildLiveReport } from "./report";
 import { getJob, saveJob, updateJob } from "./store";
+import { humanizeCaptureError } from "./errors";
 import type { ActorRunRef, AnalysisInput, AnalysisJob, SourceKey } from "./types";
 
 /** Cache corta de prensa nativa por job (evita re-fetch en finalize). */
@@ -36,17 +37,19 @@ async function runNativePress(input: AnalysisInput): Promise<{
 }> {
   const items = await scanPressMedia(input);
   const okCount = items.filter((i) => !i.error).length;
+  const firstError = items.find((i) => i.error)?.error;
   const ref: ActorRunRef = {
     source: "press",
     actorId: "native-press-scanner",
     runId: "native",
+    // Si al menos un portal respondió, la fuente cuenta como OK (aunque no haya mención de marca).
     status: okCount > 0 ? "SUCCEEDED" : "FAILED",
     itemCount: items.length,
     datasetId: undefined,
     error:
       okCount > 0
         ? undefined
-        : "No se pudo leer ningún medio digital en este corrido",
+        : humanizeCaptureError("press", firstError),
   };
   return { ref, items: items as unknown as Record<string, unknown>[] };
 }

@@ -130,10 +130,12 @@ export async function scanPressMedia(
           redirect: "follow",
           headers: {
             "User-Agent":
-              "Mozilla/5.0 (compatible; SMIDBenchmark/1.0; +https://smid.local)",
-            Accept: "text/html,application/xhtml+xml",
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "es-BO,es;q=0.9,en;q=0.8",
           },
-          signal: AbortSignal.timeout(12_000),
+          signal: AbortSignal.timeout(20_000),
         });
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`);

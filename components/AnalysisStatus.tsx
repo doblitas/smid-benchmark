@@ -137,6 +137,11 @@ export function AnalysisStatus({ id }: { id: string }) {
                 {run.error && (
                   <div className="mt-1 text-xs text-red-700">{run.error}</div>
                 )}
+                {!run.error && run.status === "FAILED" && (
+                  <div className="mt-1 text-xs text-red-700">
+                    No se pudo completar esta fuente.
+                  </div>
+                )}
               </div>
             ))}
           </div>

@@ -1,6 +1,7 @@
 import { ApifyClient } from "apify-client";
 import type { AnalysisInput, ActorRunRef, SourceKey } from "./types";
 import { pressMediaUrls } from "./press";
+import { humanizeCaptureError } from "./errors";
 
 export function hasApifyToken() {
   return Boolean(process.env.APIFY_TOKEN?.trim());
@@ -198,12 +199,14 @@ export async function startSourceRuns(
           datasetId: run.defaultDatasetId,
         };
       } catch (error) {
+        const raw =
+          error instanceof Error ? error.message : "No se pudo iniciar la fuente";
         return {
           source,
           actorId,
           runId: "",
           status: "FAILED",
-          error: error instanceof Error ? error.message : "No se pudo iniciar la fuente",
+          error: humanizeCaptureError(source, raw),
         };
       }
     }),
@@ -241,6 +244,15 @@ export async function refreshRuns(runs: ActorRunRef[]): Promise<ActorRunRef[]> {
           status: fresh.status || run.status,
           datasetId: fresh.defaultDatasetId || run.datasetId,
           itemCount,
+          error:
+            fresh.status === "FAILED" ||
+            fresh.status === "ABORTED" ||
+            fresh.status === "TIMED-OUT"
+              ? humanizeCaptureError(
+                  run.source,
+                  (fresh as { statusMessage?: string }).statusMessage || run.error,
+                )
+              : run.error,
         };
       } catch (error) {
         return {
