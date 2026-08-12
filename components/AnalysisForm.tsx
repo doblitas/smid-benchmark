@@ -25,13 +25,17 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
   const [notes, setNotes] = useState("");
   const [sources, setSources] = useState<SourceKey[]>(["meta", "google", "press"]);
   const [pressMedia, setPressMedia] = useState(DEFAULT_MEDIA.join("\n"));
-  const [sampleOnly, setSampleOnly] = useState(!captureReady);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const canSubmit = useMemo(
-    () => clientBrand.trim() && competitors.trim() && sources.length > 0 && !loading,
-    [clientBrand, competitors, sources, loading],
+    () =>
+      captureReady &&
+      clientBrand.trim() &&
+      competitors.trim() &&
+      sources.length > 0 &&
+      !loading,
+    [captureReady, clientBrand, competitors, sources, loading],
   );
 
   function toggleSource(source: SourceKey) {
@@ -42,6 +46,12 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!captureReady) {
+      setError(
+        "La captura en producción no está configurada. Agrega APIFY_TOKEN en Vercel y redespliega.",
+      );
+      return;
+    }
     setLoading(true);
     setError(null);
 
@@ -62,7 +72,7 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
           .split("\n")
           .map((line) => line.trim())
           .filter(Boolean),
-        forceDemo: sampleOnly,
+        forceDemo: false,
       };
 
       const res = await fetch("/api/analyses", {
@@ -87,6 +97,14 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
 
   return (
     <form onSubmit={onSubmit} className="space-y-8">
+      {!captureReady && (
+        <p className="border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
+          Falta configurar la captura en producción: agrega{" "}
+          <strong>APIFY_TOKEN</strong> en Vercel → Settings → Environment
+          Variables (Production) y redespliega. Sin eso no se lanzan las fuentes.
+        </p>
+      )}
+
       <section className="grid gap-4 md:grid-cols-2">
         <Field label="Empresa cliente" hint="Marca a la que entregas el benchmark">
           <input
@@ -128,25 +146,25 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
       <section className="space-y-3">
         <h2 className="font-serif text-2xl text-[var(--ink)]">Fuentes del análisis</h2>
         <p className="text-sm text-[var(--muted)]">
-          Elige dónde observar la actividad publicitaria de la competencia.
+          Elige de dónde tomar evidencia publicitaria para el reporte.
         </p>
         <div className="grid gap-3 sm:grid-cols-3">
           <SourceCard
             active={sources.includes("meta")}
             title="Meta Ads"
-            description="Creatividades y campañas de pago en Facebook e Instagram"
+            description="Campañas y creatividades de pago en Facebook / Instagram"
             onClick={() => toggleSource("meta")}
           />
           <SourceCard
             active={sources.includes("google")}
             title="Google Ads"
-            description="Search, Display y YouTube de los anunciantes"
+            description="Search, Display y YouTube en Transparency Center"
             onClick={() => toggleSource("google")}
           />
           <SourceCard
             active={sources.includes("press")}
             title="Medios digitales"
-            description="Portales y prensa digital · banners y apariciones"
+            description="Portales bolivianos · presencia y señales publicitarias"
             onClick={() => toggleSource("press")}
           />
         </div>
@@ -154,8 +172,8 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
 
       {sources.includes("press") && (
         <Field
-          label="Medios digitales a monitorear"
-          hint="Una URL por línea. Se usan para el SOV en medios externos."
+          label="URLs de medios digitales"
+          hint="Una por línea. Se usan para el SOV de medios externos."
         >
           <textarea
             className="input min-h-32 font-mono text-sm"
@@ -187,28 +205,6 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
         </Field>
       </section>
 
-      <section className="rounded-sm border border-[var(--line)] bg-[var(--paper)] p-4">
-        <label className="flex items-start gap-3 text-sm">
-          <input
-            type="checkbox"
-            className="mt-1"
-            checked={sampleOnly}
-            onChange={(e) => setSampleOnly(e.target.checked)}
-          />
-          <span>
-            <strong className="text-[var(--ink)]">
-              Generar muestra ilustrativa (sin captura en vivo)
-            </strong>
-            <span className="mt-1 block text-[var(--muted)]">
-              Ideal para revisar el formato del reporte SMID con datos de ejemplo.
-              {captureReady
-                ? " Desmárcalo para analizar señales publicitarias reales del periodo."
-                : " La captura en vivo se habilita cuando el entorno de producción esté configurado."}
-            </span>
-          </span>
-        </label>
-      </section>
-
       {error && (
         <p className="border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</p>
       )}
@@ -222,7 +218,7 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
           {loading ? "Iniciando análisis…" : "Generar reporte SMID"}
         </button>
         <p className="text-sm text-[var(--muted)]">
-          Briefing → análisis competitivo → reporte entregable
+          Briefing → captura en producción → reporte entregable
         </p>
       </div>
     </form>

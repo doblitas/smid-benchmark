@@ -159,8 +159,8 @@ export async function scanPressMedia(
   return settled;
 }
 
-/** Preferir escaneo nativo (default). Solo Apify si PRESS_CAPTURE_MODE=apify. */
+/** En producción las 3 fuentes van a captura remota. Solo `native` fuerza HTTP desde Vercel. */
 export function useNativePressCapture() {
-  const mode = (process.env.PRESS_CAPTURE_MODE || "native").trim().toLowerCase();
-  return mode !== "apify";
+  const mode = (process.env.PRESS_CAPTURE_MODE || "apify").trim().toLowerCase();
+  return mode === "native";
 }

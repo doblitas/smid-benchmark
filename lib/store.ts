@@ -1,5 +1,3 @@
-import { promises as fs } from "fs";
-import path from "path";
 import { getApifyClient, hasApifyToken } from "./apify";
 import type { AnalysisJob } from "./types";
 
@@ -20,41 +18,21 @@ function memoryMap() {
   return globalStore.__smidJobs;
 }
 
-function dataFile() {
-  return path.join(process.cwd(), ".data", "jobs.json");
-}
-
-async function readDisk(): Promise<Record<string, AnalysisJob>> {
-  try {
-    const raw = await fs.readFile(dataFile(), "utf8");
-    return JSON.parse(raw) as Record<string, AnalysisJob>;
-  } catch {
-    return {};
+async function getKvStoreId(): Promise<string> {
+  if (!hasApifyToken()) {
+    throw new Error(
+      "APIFY_TOKEN no está configurado en el entorno de producción.",
+    );
   }
-}
-
-async function writeDisk(all: Record<string, AnalysisJob>) {
-  const dir = path.dirname(dataFile());
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(dataFile(), JSON.stringify(all, null, 2), "utf8");
-}
-
-async function getKvStoreId(): Promise<string | null> {
-  if (!hasApifyToken()) return null;
   if (globalStore.__smidKvStoreId) return globalStore.__smidKvStoreId;
-  try {
-    const client = getApifyClient();
-    const store = await client.keyValueStores().getOrCreate(KV_STORE_NAME);
-    globalStore.__smidKvStoreId = store.id;
-    return store.id;
-  } catch {
-    return null;
-  }
+  const client = getApifyClient();
+  const store = await client.keyValueStores().getOrCreate(KV_STORE_NAME);
+  globalStore.__smidKvStoreId = store.id;
+  return store.id;
 }
 
 async function saveToKv(job: AnalysisJob) {
   const storeId = await getKvStoreId();
-  if (!storeId) return;
   const client = getApifyClient();
   const kv = client.keyValueStore(storeId);
   await kv.setRecord({ key: job.id, value: job, contentType: "application/json" });
@@ -71,14 +49,13 @@ async function saveToKv(job: AnalysisJob) {
       contentType: "application/json",
     });
   } catch {
-    // index is best-effort
+    // index best-effort
   }
 }
 
 async function getFromKv(id: string): Promise<AnalysisJob | null> {
-  const storeId = await getKvStoreId();
-  if (!storeId) return null;
   try {
+    const storeId = await getKvStoreId();
     const record = await getApifyClient().keyValueStore(storeId).getRecord(id);
     if (!record?.value || typeof record.value !== "object") return null;
     return record.value as AnalysisJob;
@@ -88,9 +65,8 @@ async function getFromKv(id: string): Promise<AnalysisJob | null> {
 }
 
 async function listFromKv(): Promise<AnalysisJob[]> {
-  const storeId = await getKvStoreId();
-  if (!storeId) return [];
   try {
+    const storeId = await getKvStoreId();
     const kv = getApifyClient().keyValueStore(storeId);
     const indexRecord = await kv.getRecord(INDEX_KEY);
     const ids = Array.isArray(indexRecord?.value)
@@ -109,17 +85,7 @@ async function listFromKv(): Promise<AnalysisJob[]> {
 
 export async function saveJob(job: AnalysisJob) {
   memoryMap().set(job.id, job);
-
-  // Persistencia durable en Vercel (KV remoto). Local también escribe disco.
-  await saveToKv(job).catch(() => undefined);
-
-  try {
-    const all = await readDisk();
-    all[job.id] = job;
-    await writeDisk(all);
-  } catch {
-    // En Vercel el filesystem es efímero; KV/memoria cubren el caso.
-  }
+  await saveToKv(job);
 }
 
 export async function getJob(id: string): Promise<AnalysisJob | null> {
@@ -131,13 +97,6 @@ export async function getJob(id: string): Promise<AnalysisJob | null> {
     memoryMap().set(id, fromKv);
     return fromKv;
   }
-
-  const all = await readDisk();
-  const job = all[id];
-  if (job) {
-    memoryMap().set(id, job);
-    return job;
-  }
   return null;
 }
 
@@ -146,12 +105,6 @@ export async function listJobs(): Promise<AnalysisJob[]> {
   for (const job of fromKv) {
     memoryMap().set(job.id, job);
   }
-
-  const all = await readDisk();
-  for (const job of Object.values(all)) {
-    memoryMap().set(job.id, job);
-  }
-
   return Array.from(memoryMap().values()).sort((a, b) =>
     b.createdAt.localeCompare(a.createdAt),
   );

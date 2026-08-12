@@ -6,7 +6,7 @@ import {
   startSourceRuns,
 } from "./apify";
 import { scanPressMedia, useNativePressCapture } from "./press";
-import { appendLog, buildDemoReport, buildLiveReport } from "./report";
+import { appendLog, buildLiveReport } from "./report";
 import { getJob, saveJob, updateJob } from "./store";
 import { humanizeCaptureError } from "./errors";
 import type { ActorRunRef, AnalysisInput, AnalysisJob, SourceKey } from "./types";
@@ -57,45 +57,124 @@ async function runNativePress(input: AnalysisInput): Promise<{
 export async function createAndStartAnalysis(
   input: AnalysisInput,
 ): Promise<AnalysisJob> {
+  if (!hasApifyToken()) {
+    throw new Error(
+      "Falta configurar la captura en producción (APIFY_TOKEN en Vercel). Sin eso no se pueden lanzar las fuentes.",
+    );
+  }
+
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const useDemo = input.forceDemo || !hasApifyToken();
 
   let job: AnalysisJob = {
     id,
     createdAt: now,
     updatedAt: now,
     status: "queued",
-    input,
-    mode: useDemo ? "demo" : "live",
+    input: { ...input, forceDemo: false },
+    mode: "live",
     runs: [],
     logs: [],
   };
 
   job = appendLog(
     job,
-    useDemo
-      ? "Preparando muestra ilustrativa del reporte SMID…"
-      : "Recopilando señales publicitarias de las fuentes seleccionadas…",
+    "Recopilando señales publicitarias de las fuentes seleccionadas…",
   );
   await saveJob(job);
 
-  // En Vercel el fire-and-forget se corta al responder. Demo: completar en el request.
-  // Live: waitUntil mantiene el trabajo vivo tras el response.
-  if (useDemo) {
-    await processAnalysis(id);
-    return (await getJob(id)) ?? job;
+  // Arrancar fuentes en este request para que los runs existan de inmediato en producción.
+  await updateJob(id, {
+    status: "running",
+    logs: appendLog(
+      job,
+      "Lanzando captura de Meta Ads, Google Ads y medios digitales…",
+    ).logs,
+  });
+
+  const { pressNative, apifySources } = splitSources(input.sources);
+  const pressPromise = pressNative
+    ? runNativePress(input)
+    : Promise.resolve(null);
+  const apifyPromise =
+    apifySources.length > 0
+      ? startSourceRuns(input, apifySources)
+      : Promise.resolve([] as ActorRunRef[]);
+
+  const [pressResult, apifyRuns] = await Promise.all([pressPromise, apifyPromise]);
+  const runs: ActorRunRef[] = [...apifyRuns];
+  if (pressResult) {
+    runs.push(pressResult.ref);
+    pressItemsByJob.set(id, pressResult.items);
   }
+
+  const started = await getJob(id);
+  if (!started) {
+    throw new Error("No se pudo persistir el análisis en producción.");
+  }
+
+  const sourceNames = runs.map((r) => sourceLabel(r.source)).join(", ");
+  await saveJob({
+    ...appendLog(
+      started,
+      `Fuentes lanzadas: ${sourceNames || "ninguna"}. Revisa el progreso en el reporte.`,
+    ),
+    runs,
+    status: "running",
+  });
 
   try {
     const { waitUntil } = await import("@vercel/functions");
-    waitUntil(processAnalysis(id));
+    waitUntil(continueLiveAnalysis(id));
   } catch {
-    // Local / sin @vercel/functions
-    void processAnalysis(id);
+    void continueLiveAnalysis(id);
   }
 
-  return job;
+  return (await getJob(id))!;
+}
+
+/** Poll + finalize después de haber lanzado los runs. */
+async function continueLiveAnalysis(id: string) {
+  try {
+    let job = await getJob(id);
+    if (!job) return;
+
+    const needsPoll = job.runs.some(
+      (r) => r.runId && r.runId !== "native" && !isTerminalRunStatus(r.status),
+    );
+    if (needsPoll) {
+      const started = Date.now();
+      while (Date.now() - started < 90_000) {
+        await sleep(5000);
+        job = (await getJob(id))!;
+        const refreshed = await refreshRuns(job.runs);
+        job = {
+          ...appendLog(job, "Actualizando progreso del análisis…"),
+          runs: refreshed,
+        };
+        await saveJob(job);
+        if (refreshed.every((r) => isTerminalRunStatus(r.status))) break;
+      }
+    }
+
+    await finalizeLiveReport(id);
+  } catch (error) {
+    const failed = await getJob(id);
+    if (!failed) return;
+    if (!failed.report) {
+      try {
+        await finalizeLiveReport(id);
+        return;
+      } catch {
+        // fall through
+      }
+    }
+    await updateJob(id, {
+      status: "failed",
+      error: error instanceof Error ? error.message : "Error desconocido",
+      logs: appendLog(failed, "No se pudo completar el análisis.").logs,
+    });
+  }
 }
 
 /** Arma el reporte a partir de runs ya terminados (no relanza fuentes). */
@@ -171,147 +250,48 @@ export async function finalizeLiveReport(id: string) {
   });
 }
 
+/** Reintento manual: continúa poll/finalize (los runs ya deben existir). */
 export async function processAnalysis(id: string) {
   const current = await getJob(id);
   if (!current) return;
+  if (current.report) return;
 
-  try {
-    if (current.mode === "demo") {
-      await updateJob(id, {
-        status: "running",
-        logs: appendLog(current, "Analizando competencia…").logs,
-      });
-      await sleep(1200);
+  if (
+    current.runs.length > 0 &&
+    current.runs.every((r) => isTerminalRunStatus(r.status))
+  ) {
+    await finalizeLiveReport(id);
+    return;
+  }
 
-      const mid = await getJob(id);
-      if (!mid) return;
-      await updateJob(id, {
-        status: "building_report",
-        logs: appendLog(mid, "Preparando reporte SMID…").logs,
-      });
-      await sleep(800);
-
-      const report = buildDemoReport(current.input);
-      const done = await getJob(id);
-      if (!done) return;
-      await updateJob(id, {
-        status: "completed",
-        report,
-        logs: appendLog(done, "Reporte listo.").logs,
-      });
-      return;
-    }
-
-    // Si ya hay runs y están terminales sin reporte, solo finalizar.
-    if (
-      current.runs.length > 0 &&
-      current.runs.every((r) => isTerminalRunStatus(r.status)) &&
-      !current.report
-    ) {
-      await finalizeLiveReport(id);
-      return;
-    }
-
-    await updateJob(id, {
-      status: "running",
-      logs: appendLog(
-        current,
-        "Recopilando señales de Meta Ads, Google Ads y medios…",
-      ).logs,
-    });
-
+  if (current.runs.length === 0) {
+    // Recuperación: relanzar fuentes si el job quedó sin runs.
     const { pressNative, apifySources } = splitSources(current.input.sources);
-
     const pressPromise = pressNative
       ? runNativePress(current.input)
       : Promise.resolve(null);
-
     const apifyPromise =
       apifySources.length > 0
         ? startSourceRuns(current.input, apifySources)
         : Promise.resolve([] as ActorRunRef[]);
-
-    const [pressResult, apifyRuns] = await Promise.all([pressPromise, apifyPromise]);
-
+    const [pressResult, apifyRuns] = await Promise.all([
+      pressPromise,
+      apifyPromise,
+    ]);
     const runs: ActorRunRef[] = [...apifyRuns];
     if (pressResult) {
       runs.push(pressResult.ref);
       pressItemsByJob.set(id, pressResult.items);
     }
-
-    let job = await getJob(id);
-    if (!job) return;
-    const sourceNames = runs.map((r) => sourceLabel(r.source)).join(", ");
-    job = {
-      ...appendLog(job, `Fuentes en análisis: ${sourceNames}.`),
+    await saveJob({
+      ...current,
       runs,
-    };
-    await saveJob(job);
-
-    // Poll Apify runs hasta ~90s. Prensa nativa ya está terminal.
-    const needsPoll = runs.some(
-      (r) => r.runId && r.runId !== "native" && !isTerminalRunStatus(r.status),
-    );
-    if (needsPoll) {
-      const started = Date.now();
-      while (Date.now() - started < 90_000) {
-        await sleep(5000);
-        job = (await getJob(id))!;
-        const refreshed = await refreshRuns(job.runs);
-        job = {
-          ...appendLog(job, "Actualizando progreso del análisis…"),
-          runs: refreshed,
-        };
-        await saveJob(job);
-
-        if (refreshed.every((r) => isTerminalRunStatus(r.status))) break;
-      }
-    }
-
-    // Prensa nativa se re-escanea en finalize (barato) si no hay dataset Apify.
-    await finalizeLiveReport(id);
-  } catch (error) {
-    // Último recurso: intentar reporte parcial en vez de fallar todo el job.
-    try {
-      const failed = await getJob(id);
-      if (!failed) return;
-      if (failed.mode === "live" && !failed.report) {
-        const datasets = await fetchRunDatasets(failed.runs);
-        if (failed.input.sources.includes("press") && useNativePressCapture()) {
-          try {
-            datasets.press = (await scanPressMedia(
-              failed.input,
-            )) as unknown as Record<string, unknown>[];
-          } catch {
-            datasets.press = [];
-          }
-        }
-        const failedSources = failed.runs
-          .filter((r) => r.status !== "SUCCEEDED")
-          .map((r) => sourceLabel(r.source));
-        const report = buildLiveReport(failed.input, datasets, { failedSources });
-        await updateJob(id, {
-          status: "completed",
-          report,
-          logs: appendLog(
-            failed,
-            "Reporte listo con cobertura parcial tras un error intermedio.",
-          ).logs,
-        });
-        return;
-      }
-    } catch {
-      // caer al failed total
-    }
-
-    const failed = await getJob(id);
-    if (!failed) return;
-    await updateJob(id, {
-      status: "failed",
-      error: error instanceof Error ? error.message : "Error desconocido",
-      logs: appendLog(failed, "No se pudo completar el análisis.").logs,
+      status: "running",
+      updatedAt: new Date().toISOString(),
     });
   }
+
+  await continueLiveAnalysis(id);
 }
 
 export async function syncAnalysis(id: string) {
@@ -327,7 +307,6 @@ export async function syncAnalysis(id: string) {
 
     const allDone = refreshed.every((r) => isTerminalRunStatus(r.status));
 
-    // Finalizar con lo disponible (incluso si todas fallaron → reporte parcial vacío).
     if (allDone && !job.report) {
       void finalizeLiveReport(id);
     }

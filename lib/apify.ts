@@ -16,10 +16,9 @@ export function getApifyClient() {
 }
 
 /**
- * Defaults orientados a SMID:
- * - Meta / Google: Actors especializados de Ad Library / Transparency.
- * - Prensa vía Apify solo si PRESS_CAPTURE_MODE=apify (default es escaneo nativo en lib/press.ts).
- *   cheerio-scraper evita Playwright/OOM del website-content-crawler.
+ * Defaults orientados a SMID en producción:
+ * - Meta / Google / Prensa van a captura remota (visibles en la consola de runs).
+ * - PRESS_CAPTURE_MODE=native solo si se fuerza escaneo HTTP desde Vercel.
  */
 const DEFAULT_ACTORS: Record<SourceKey, string> = {
   meta: process.env.APIFY_META_ACTOR_ID || "apify/facebook-ads-scraper",

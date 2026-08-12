@@ -1,38 +1,26 @@
 # BENCHMARK SMID
 
-Producto de inteligencia publicitaria competitiva: briefing → análisis → reporte mensual.
+Producto de inteligencia publicitaria competitiva: briefing → captura → reporte mensual.
 
 ## Cómo usarlo
 
 1. Abre **Nuevo análisis**
-2. Completa cliente, competencia, periodo y fuentes (Meta Ads, Google Ads, medios digitales)
-3. Opcional: marca *Generar muestra ilustrativa* para ver el formato del reporte con datos de ejemplo
-4. Genera el reporte SMID y revisa:
+2. Completa cliente, competencia, periodo y fuentes
+3. Genera el reporte SMID:
    - Temáticas de comunicación
    - SOV de impresiones en medios externos
    - SOV de impresiones en medios propios de pago
    - Inversión estimada Meta / Google
 
-Las impresiones e inversión se presentan siempre como **estimaciones**.
+Las impresiones e inversión se presentan como **estimaciones**.
 
-## Arranque local
+## Producción (Vercel)
 
-```bash
-cd smid-benchmark
-npm install
-npm run dev -- --hostname 127.0.0.1 --port 3000
-```
+1. Conecta el repo `doblitas/smid-benchmark`
+2. En **Environment Variables** (Production) agrega:
+   - `APIFY_TOKEN` — obligatorio (sin esto no se lanzan fuentes)
+   - Opcional: `APIFY_META_ACTOR_ID`, `APIFY_GOOGLE_ACTOR_ID`, `APIFY_PRESS_ACTOR_ID`
+   - Opcional: `PRESS_CAPTURE_MODE=apify` (default) o `native`
+3. Redeploy
 
-Abre: [http://127.0.0.1:3000/nuevo](http://127.0.0.1:3000/nuevo)
-
-## Desarrollo
-
-Configuración opcional en `.env.local` (no visible en el producto):
-
-- `APIFY_TOKEN` — habilita captura en vivo de Meta / Google
-- `PRESS_CAPTURE_MODE` — `native` (default, escaneo liviano de portales) o `apify`
-- `APIFY_*_ACTOR_ID` / `APIFY_*_MEMORY_MB` — ajuste fino de fuentes
-
-Si una fuente falla, el reporte se completa con el resto (cobertura parcial).
-
-Deploy: conectar el repo a Vercel y definir las variables de entorno en el proyecto.
+Los análisis y los runs de captura viven en producción (storage remoto). No uses modo muestra local.

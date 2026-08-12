@@ -114,9 +114,7 @@ export function AnalysisStatus({ id }: { id: string }) {
             <span className="inline-block border border-[var(--line)] bg-[var(--soft)] px-3 py-1 text-xs font-semibold uppercase tracking-wide">
               {statusLabel[job.status]}
             </span>
-            <p className="mt-2 text-xs text-[var(--muted)]">
-              {job.mode === "demo" ? "Muestra ilustrativa" : "Captura del periodo"}
-            </p>
+            <p className="mt-2 text-xs text-[var(--muted)]">Captura en producción</p>
           </div>
         </div>
 
