@@ -77,8 +77,20 @@ export async function createAndStartAnalysis(
   );
   await saveJob(job);
 
-  // Fire-and-forget processing (best effort en serverless).
-  void processAnalysis(id);
+  // En Vercel el fire-and-forget se corta al responder. Demo: completar en el request.
+  // Live: waitUntil mantiene el trabajo vivo tras el response.
+  if (useDemo) {
+    await processAnalysis(id);
+    return (await getJob(id)) ?? job;
+  }
+
+  try {
+    const { waitUntil } = await import("@vercel/functions");
+    waitUntil(processAnalysis(id));
+  } catch {
+    // Local / sin @vercel/functions
+    void processAnalysis(id);
+  }
 
   return job;
 }

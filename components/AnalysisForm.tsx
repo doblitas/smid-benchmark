@@ -74,6 +74,10 @@ export function AnalysisForm({ captureReady }: { captureReady: boolean }) {
       if (!res.ok) {
         throw new Error(data.error || "No se pudo iniciar el análisis");
       }
+      if (data.job) {
+        const { cacheJob } = await import("@/lib/job-cache");
+        cacheJob(data.job);
+      }
       router.push(`/analisis/${data.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error inesperado");
