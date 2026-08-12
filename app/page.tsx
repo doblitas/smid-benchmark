@@ -87,7 +87,6 @@ export default async function HomePage() {
                 </span>
                 <span className="text-xs uppercase tracking-wide text-[var(--muted)]">
                   {statusLabel[job.status] || job.status}
-                  {job.mode === "demo" ? " · muestra" : ""}
                 </span>
               </Link>
             ))}
