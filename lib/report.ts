@@ -232,12 +232,53 @@ export function buildDemoReport(input: AnalysisInput): ReportData {
   };
 }
 
+function looksLikeCodeOrJunk(text: string) {
+  return /gbar_|\{CONFIG:|function\s*\(|window\.|document\.|googletag|;this\.|<\/?[a-z]|var\s+\w+\s*=|ObjectMultiplex/i.test(
+    text,
+  );
+}
+
 function pickText(item: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = item[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) {
+      const trimmed = value.trim();
+      if (looksLikeCodeOrJunk(trimmed)) continue;
+      return trimmed;
+    }
   }
   return "";
+}
+
+function isUsefulAdItem(item: Record<string, unknown>) {
+  if (item.useful === false) return false;
+  if (typeof item.error === "string" && item.error) return false;
+  const body = pickText(item, [
+    "ad_text",
+    "body",
+    "text",
+    "snapshotBody",
+    "title",
+    "headline",
+    "adCreativeBody",
+    "snapshot.body",
+  ]);
+  const brand = pickText(item, [
+    "pageName",
+    "advertiser",
+    "advertiserName",
+    "name",
+    "page_name",
+  ]);
+  // Meta Ad Library suele traer snapshot / adArchiveID aunque el copy sea corto.
+  const hasMetaShape = Boolean(
+    item.adArchiveID ||
+      item.ad_archive_id ||
+      item.snapshot ||
+      item.card ||
+      item.cards,
+  );
+  return Boolean(body || hasMetaShape || (brand && item.platform === "google" && item.useful));
 }
 
 function mediumLabelFromUrl(url: string) {
@@ -295,15 +336,25 @@ export function buildLiveReport(
   datasets: Record<string, Record<string, unknown>[]>,
   options?: { failedSources?: string[] },
 ): ReportData {
-  const metaItems = datasets.meta || [];
-  const googleItems = datasets.google || [];
+  const metaRaw = datasets.meta || [];
+  const googleRaw = datasets.google || [];
   const pressItems = datasets.press || [];
+  const metaItems = metaRaw.filter(isUsefulAdItem);
+  const googleItems = googleRaw.filter(isUsefulAdItem);
   const failedSources = options?.failedSources || [];
   const hasAnySignal =
-    metaItems.length > 0 || googleItems.length > 0 || pressItems.some((i) => !i.error);
+    metaItems.length > 0 ||
+    googleItems.length > 0 ||
+    pressItems.some((i) => {
+      if (i.error) return false;
+      const hits = Array.isArray(i.brandHits) ? i.brandHits : [];
+      return hits.length > 0;
+    });
 
   const client = input.clientBrand;
   const competitor = input.competitors[0] || "Competidor";
+  const brandPattern = (name: string) =>
+    new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
 
   const liveThemes: ThemeRow[] = [];
   const allAds = [...metaItems, ...googleItems].slice(0, 20);
@@ -314,13 +365,15 @@ export function buildLiveReport(
       "body",
       "text",
       "snapshotBody",
+      "adCreativeBody",
       "title",
       "headline",
     ]);
     const brandGuess =
-      pickText(item, ["pageName", "advertiser", "advertiserName", "name"]) ||
-      competitor ||
-      client;
+      pickText(item, ["pageName", "advertiser", "advertiserName", "name", "page_name"]) ||
+      (brandPattern(client).test(JSON.stringify(item).slice(0, 800))
+        ? client
+        : competitor);
 
     if (!body && !brandGuess) continue;
 
@@ -336,45 +389,79 @@ export function buildLiveReport(
 
   const liveExternal = externalSovFromPress(pressItems);
   const pressOk = pressItems.filter((i) => !i.error).length;
+  const pressMentions = liveExternal.length;
 
   const metaCount = metaItems.length;
   const googleCount = googleItems.length;
-  const paidTotal = Math.max(metaCount + googleCount, 1);
-  const clientMeta = Math.round(metaCount / 2);
-  const clientGoogle = Math.round(googleCount / 2);
 
-  const paidSov: PaidSovRow[] = hasAnySignal
-    ? [
-        {
-          brand: competitor,
-          platform: "Meta Ads",
-          activeAds: Math.max(metaCount - clientMeta, 0),
-          continuity: metaCount > 0 ? 70 : 0,
-          estimatedImpressions: Math.max(metaCount - clientMeta, 0) * 50_000,
-        },
-        {
-          brand: competitor,
-          platform: "Google Ads",
-          activeAds: Math.max(googleCount - clientGoogle, 0),
-          continuity: googleCount > 0 ? 55 : 0,
-          estimatedImpressions: Math.max(googleCount - clientGoogle, 0) * 40_000,
-        },
-        {
-          brand: client,
-          platform: "Meta Ads",
-          activeAds: clientMeta,
-          continuity: clientMeta > 0 ? 60 : 0,
-          estimatedImpressions: clientMeta * 50_000,
-        },
-        {
-          brand: client,
-          platform: "Google Ads",
-          activeAds: clientGoogle,
-          continuity: clientGoogle > 0 ? 45 : 0,
-          estimatedImpressions: clientGoogle * 40_000,
-        },
-      ]
-    : [];
+  const countForBrand = (
+    items: Record<string, unknown>[],
+    brand: string,
+  ) =>
+    items.filter((item) => {
+      const blob = [
+        pickText(item, ["pageName", "advertiser", "advertiserName", "name", "page_name"]),
+        pickText(item, ["body", "text", "title", "headline"]),
+        typeof item.url === "string" ? item.url : "",
+      ].join(" ");
+      return brandPattern(brand).test(blob);
+    }).length;
+
+  const clientMeta = countForBrand(metaItems, client);
+  const clientGoogle = countForBrand(googleItems, client);
+  const compMeta = countForBrand(metaItems, competitor);
+  const compGoogle = countForBrand(googleItems, competitor);
+
+  const metaMatched = clientMeta + compMeta;
+  const googleMatched = clientGoogle + compGoogle;
+  const metaClientFinal =
+    metaMatched === 0 && metaCount > 0 ? Math.round(metaCount / 2) : clientMeta;
+  const metaCompFinal =
+    metaMatched === 0 && metaCount > 0
+      ? metaCount - metaClientFinal
+      : compMeta;
+  const googleClientFinal =
+    googleMatched === 0 && googleCount > 0
+      ? Math.round(googleCount / 2)
+      : clientGoogle;
+  const googleCompFinal =
+    googleMatched === 0 && googleCount > 0
+      ? googleCount - googleClientFinal
+      : compGoogle;
+
+  const paidSov: PaidSovRow[] =
+    metaCount + googleCount > 0
+      ? [
+          {
+            brand: competitor,
+            platform: "Meta Ads",
+            activeAds: metaCompFinal,
+            continuity: metaCompFinal > 0 ? 70 : 0,
+            estimatedImpressions: metaCompFinal * 50_000,
+          },
+          {
+            brand: competitor,
+            platform: "Google Ads",
+            activeAds: googleCompFinal,
+            continuity: googleCompFinal > 0 ? 55 : 0,
+            estimatedImpressions: googleCompFinal * 40_000,
+          },
+          {
+            brand: client,
+            platform: "Meta Ads",
+            activeAds: metaClientFinal,
+            continuity: metaClientFinal > 0 ? 60 : 0,
+            estimatedImpressions: metaClientFinal * 50_000,
+          },
+          {
+            brand: client,
+            platform: "Google Ads",
+            activeAds: googleClientFinal,
+            continuity: googleClientFinal > 0 ? 45 : 0,
+            estimatedImpressions: googleClientFinal * 40_000,
+          },
+        ].filter((r) => r.activeAds > 0)
+      : [];
 
   const clientPaid = paidSov
     .filter((r) => r.brand === client)
@@ -417,27 +504,27 @@ export function buildLiveReport(
     mode: "live",
     input,
     summary: {
-      clientShareExternal: hasAnySignal
+      clientShareExternal: liveExternal.length
         ? Math.round((clientExt / extTotal) * 100)
         : 0,
-      competitorShareExternal: hasAnySignal
+      competitorShareExternal: liveExternal.length
         ? Math.round((compExt / extTotal) * 100)
         : 0,
-      clientSharePaid: hasAnySignal
+      clientSharePaid: metaCount + googleCount > 0
         ? Math.round((clientPaid / paidImpTotal) * 100)
         : 0,
-      competitorSharePaid: hasAnySignal
+      competitorSharePaid: metaCount + googleCount > 0
         ? Math.round((compPaid / paidImpTotal) * 100)
         : 0,
-      clientSpendTotal: hasAnySignal ? clientSpendTotal : 0,
-      competitorSpendTotal: hasAnySignal ? competitorSpendTotal : 0,
+      clientSpendTotal: metaCount + googleCount > 0 ? clientSpendTotal : 0,
+      competitorSpendTotal: metaCount + googleCount > 0 ? competitorSpendTotal : 0,
     },
     themes: liveThemes.slice(0, 12),
     externalSov: liveExternal,
     paidSov,
     spend,
     findings: [
-      `Señales observadas: Meta Ads ${metaCount}, Google Ads ${googleCount}, medios digitales ${pressOk}/${pressItems.length || 0}.`,
+      `Señales útiles: Meta Ads ${metaCount}/${metaRaw.length}, Google Ads ${googleCount}/${googleRaw.length}, medios con mención ${pressMentions} (páginas ${pressOk}).`,
       ...(failedSources.length > 0
         ? [
             `Sin datos útiles de: ${failedSources.join(", ")}. No se inventaron cifras de relleno.`,
@@ -449,7 +536,7 @@ export function buildLiveReport(
     ],
     methodologyNotes: [
       "Solo se reportan métricas derivadas de señales realmente capturadas en este periodo.",
-      `Volumen observado — Meta Ads: ${metaCount}. Google Ads: ${googleCount}. Medios digitales: ${pressOk}.`,
+      `Volumen útil — Meta Ads: ${metaCount}. Google Ads: ${googleCount}. Medios con mención: ${pressMentions}.`,
       ...(failedSources.length > 0
         ? [`Fuentes sin datos: ${failedSources.join(", ")}.`]
         : []),

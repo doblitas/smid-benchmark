@@ -25,8 +25,8 @@ const DEFAULT_ACTORS: Record<SourceKey, string> = {
   meta:
     process.env.APIFY_META_ACTOR_ID ||
     "curious_coder/facebook-ads-library-scraper",
-  // Transparency vía cheerio (el actor “google-ads-transparency-scraper” no es estable).
-  google: process.env.APIFY_GOOGLE_ACTOR_ID || "apify/cheerio-scraper",
+  // Transparency es SPA → Puppeteer (Cheerio solo ve JS del shell).
+  google: process.env.APIFY_GOOGLE_ACTOR_ID || "apify/puppeteer-scraper",
   press: process.env.APIFY_PRESS_ACTOR_ID || "apify/cheerio-scraper",
 };
 
@@ -87,24 +87,58 @@ function buildPressPageFunction(brands: string[]) {
 
 function buildGoogleTransparencyPageFunction(brands: string[]) {
   const brandsJson = JSON.stringify(brands);
+  // Ads Transparency es SPA: preferimos texto visible (Puppeteer) y filtramos basura JS.
   return `async function pageFunction(context) {
-  const { $, request, log } = context;
+  const { request, log, page, $ } = context;
   const brands = ${brandsJson};
   const url = request.url;
-  const title = $('title').first().text().trim();
-  const bodyText = $('body').text().replace(/\\s+/g, ' ').trim().slice(0, 20000);
-  const brand = brands.find((b) => new RegExp(b.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'), 'i').test(url + ' ' + bodyText)) || brands[0] || '';
-  const snippets = bodyText.split(/(?<=[.!?])\\s+/).filter((s) => s.length > 40).slice(0, 8);
-  log.info('Google transparency page', { url, brand, snippets: snippets.length });
+  let title = '';
+  let bodyText = '';
+
+  if (page) {
+    try {
+      await page.waitForSelector('body', { timeout: 15000 });
+      await new Promise((r) => setTimeout(r, 2500));
+      title = await page.title();
+      bodyText = await page.evaluate(() => (document.body && document.body.innerText) || '');
+    } catch (err) {
+      log.warning('Google transparency wait failed', { err: String(err) });
+    }
+  } else if ($) {
+    title = $('title').first().text().trim();
+    $('script, style, noscript').remove();
+    bodyText = $('body').text();
+  }
+
+  bodyText = String(bodyText || '').replace(/\\s+/g, ' ').trim().slice(0, 20000);
+  const brand =
+    brands.find((b) => new RegExp(b.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'), 'i').test(url + ' ' + bodyText)) ||
+    brands[0] ||
+    '';
+
+  const looksLikeCode = (s) =>
+    /gbar_|\\{CONFIG:|function\\s*\\(|window\\.|document\\.|googletag|\\};this\\.|<\\/?[a-z]|var\\s+\\w+\\s*=/i.test(s);
+
+  const snippets = bodyText
+    .split(/(?<=[.!?])\\s+|\\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 28 && s.length < 280 && !looksLikeCode(s))
+    .filter((s) => /[a-záéíóúñ]/i.test(s))
+    .slice(0, 8);
+
+  const cleanOffer = snippets[0] || '';
+  log.info('Google transparency page', { url, brand, snippets: snippets.length, hasCleanOffer: Boolean(cleanOffer) });
+
   return {
     platform: 'google',
     url,
     title,
     advertiserName: brand,
     pageName: brand,
-    body: snippets[0] || bodyText.slice(0, 200),
-    text: snippets.join(' | ').slice(0, 500),
-    headline: title,
+    body: cleanOffer,
+    text: snippets.join(' · ').slice(0, 500),
+    headline: title && !looksLikeCode(title) ? title : brand + ' · Google Ads Transparency',
+    useful: Boolean(cleanOffer) || /ad|anuncio|advertiser|transparency/i.test(bodyText.slice(0, 500)),
     capturedAt: new Date().toISOString(),
   };
 }`;
@@ -112,19 +146,19 @@ function buildGoogleTransparencyPageFunction(brands: string[]) {
 
 function buildActorInput(source: SourceKey, input: AnalysisInput) {
   const brands = brandsForInput(input);
-  const country = input.country || "Bolivia";
 
   if (source === "meta") {
-    const urls = brands.map(
-      (brand) =>
-        `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BO&q=${encodeURIComponent(brand)}&search_type=keyword_unordered&media_type=all`,
-    );
+    // El actor exige objects { url }, no strings sueltas.
+    const urls = brands.map((brand) => ({
+      url: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BO&q=${encodeURIComponent(brand)}&search_type=keyword_unordered&media_type=all`,
+    }));
     return {
       urls,
       count: 40,
       scrapeAdDetails: true,
-      "scrapePageAds.activeStatus": "all",
-      proxyConfiguration: { useApifyProxy: true },
+      "scrapePageAds.activeStatus": "active",
+      "scrapePageAds.countryCode": "BO",
+      proxy: { useApifyProxy: true },
     };
   }
 
@@ -134,7 +168,11 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
       url: `https://adstransparency.google.com/?region=BO&text=${encodeURIComponent(brand)}`,
     }));
 
-    if (googleActor.includes("cheerio-scraper")) {
+    if (
+      googleActor.includes("cheerio-scraper") ||
+      googleActor.includes("puppeteer-scraper") ||
+      googleActor.includes("playwright-scraper")
+    ) {
       return {
         startUrls: urls,
         keepUrlFragments: true,
@@ -142,11 +180,12 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
         pageFunction: buildGoogleTransparencyPageFunction(brands),
         proxyConfiguration: { useApifyProxy: true },
         initialConcurrency: 1,
-        maxConcurrency: 2,
+        maxConcurrency: 1,
         maxRequestRetries: 2,
         maxPagesPerCrawl: brands.length,
         maxRequestsPerCrawl: brands.length,
-        pageFunctionTimeoutSecs: 60,
+        pageFunctionTimeoutSecs: 90,
+        navigationTimeoutSecs: 60,
       };
     }
 
@@ -161,7 +200,7 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
       resultsLimit: 40,
       maxAds: 40,
       startUrls: urls,
-      urls: urls.map((u) => u.url),
+      urls,
     };
   }
 
@@ -203,7 +242,11 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
 function memoryForSource(source: SourceKey) {
   if (source === "press" || source === "google") {
     const actor = DEFAULT_ACTORS[source];
-    const defaultMb = actor.includes("website-content-crawler") ? 4096 : 1024;
+    const defaultMb = actor.includes("website-content-crawler")
+      ? 4096
+      : actor.includes("puppeteer") || actor.includes("playwright")
+        ? 2048
+        : 1024;
     return Number(
       process.env[
         source === "press" ? "APIFY_PRESS_MEMORY_MB" : "APIFY_GOOGLE_MEMORY_MB"
