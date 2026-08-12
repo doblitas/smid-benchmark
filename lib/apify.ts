@@ -21,10 +21,12 @@ export function getApifyClient() {
  * - PRESS_CAPTURE_MODE=native solo si se fuerza escaneo HTTP desde Vercel.
  */
 const DEFAULT_ACTORS: Record<SourceKey, string> = {
-  meta: process.env.APIFY_META_ACTOR_ID || "apify/facebook-ads-scraper",
-  google:
-    process.env.APIFY_GOOGLE_ACTOR_ID ||
-    "curious_coder/google-ads-transparency-scraper",
+  // Ad Library real (no el scraper genérico de páginas de Facebook).
+  meta:
+    process.env.APIFY_META_ACTOR_ID ||
+    "curious_coder/facebook-ads-library-scraper",
+  // Transparency vía cheerio (el actor “google-ads-transparency-scraper” no es estable).
+  google: process.env.APIFY_GOOGLE_ACTOR_ID || "apify/cheerio-scraper",
   press: process.env.APIFY_PRESS_ACTOR_ID || "apify/cheerio-scraper",
 };
 
@@ -83,31 +85,71 @@ function buildPressPageFunction(brands: string[]) {
 }`;
 }
 
+function buildGoogleTransparencyPageFunction(brands: string[]) {
+  const brandsJson = JSON.stringify(brands);
+  return `async function pageFunction(context) {
+  const { $, request, log } = context;
+  const brands = ${brandsJson};
+  const url = request.url;
+  const title = $('title').first().text().trim();
+  const bodyText = $('body').text().replace(/\\s+/g, ' ').trim().slice(0, 20000);
+  const brand = brands.find((b) => new RegExp(b.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'), 'i').test(url + ' ' + bodyText)) || brands[0] || '';
+  const snippets = bodyText.split(/(?<=[.!?])\\s+/).filter((s) => s.length > 40).slice(0, 8);
+  log.info('Google transparency page', { url, brand, snippets: snippets.length });
+  return {
+    platform: 'google',
+    url,
+    title,
+    advertiserName: brand,
+    pageName: brand,
+    body: snippets[0] || bodyText.slice(0, 200),
+    text: snippets.join(' | ').slice(0, 500),
+    headline: title,
+    capturedAt: new Date().toISOString(),
+  };
+}`;
+}
+
 function buildActorInput(source: SourceKey, input: AnalysisInput) {
   const brands = brandsForInput(input);
   const country = input.country || "Bolivia";
 
   if (source === "meta") {
+    const urls = brands.map(
+      (brand) =>
+        `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BO&q=${encodeURIComponent(brand)}&search_type=keyword_unordered&media_type=all`,
+    );
     return {
-      country,
-      countries: ["BO", country],
-      searchTerms: brands,
-      urls: brands.map(
-        (brand) =>
-          `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BO&q=${encodeURIComponent(brand)}&search_type=keyword_unordered`,
-      ),
-      startUrls: brands.map(
-        (brand) =>
-          `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=BO&q=${encodeURIComponent(brand)}&search_type=keyword_unordered`,
-      ),
-      maxItems: 40,
-      maxAds: 40,
-      resultsLimit: 40,
+      urls,
+      count: 40,
       scrapeAdDetails: true,
+      "scrapePageAds.activeStatus": "all",
+      proxyConfiguration: { useApifyProxy: true },
     };
   }
 
   if (source === "google") {
+    const googleActor = DEFAULT_ACTORS.google;
+    const urls = brands.map((brand) => ({
+      url: `https://adstransparency.google.com/?region=BO&text=${encodeURIComponent(brand)}`,
+    }));
+
+    if (googleActor.includes("cheerio-scraper")) {
+      return {
+        startUrls: urls,
+        keepUrlFragments: true,
+        linkSelector: "",
+        pageFunction: buildGoogleTransparencyPageFunction(brands),
+        proxyConfiguration: { useApifyProxy: true },
+        initialConcurrency: 1,
+        maxConcurrency: 2,
+        maxRequestRetries: 2,
+        maxPagesPerCrawl: brands.length,
+        maxRequestsPerCrawl: brands.length,
+        pageFunctionTimeoutSecs: 60,
+      };
+    }
+
     return {
       queries: brands,
       advertisers: brands,
@@ -118,13 +160,14 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
       maxItems: 40,
       resultsLimit: 40,
       maxAds: 40,
+      startUrls: urls,
+      urls: urls.map((u) => u.url),
     };
   }
 
   const media = pressMediaUrls(input);
   const pressActor = DEFAULT_ACTORS.press;
 
-  // Compatibilidad si alguien fuerza website-content-crawler por env.
   if (pressActor.includes("website-content-crawler")) {
     return {
       startUrls: media.map((url) => ({ url })),
@@ -140,7 +183,6 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
     };
   }
 
-  // cheerio-scraper — liviano, sin browser.
   return {
     startUrls: media.map((url) => ({ url })),
     keepUrlFragments: false,
@@ -159,15 +201,16 @@ function buildActorInput(source: SourceKey, input: AnalysisInput) {
 }
 
 function memoryForSource(source: SourceKey) {
-  if (source === "press") {
-    const pressActor = DEFAULT_ACTORS.press;
-    const defaultMb = pressActor.includes("website-content-crawler") ? 4096 : 1024;
-    return Number(process.env.APIFY_PRESS_MEMORY_MB || defaultMb);
+  if (source === "press" || source === "google") {
+    const actor = DEFAULT_ACTORS[source];
+    const defaultMb = actor.includes("website-content-crawler") ? 4096 : 1024;
+    return Number(
+      process.env[
+        source === "press" ? "APIFY_PRESS_MEMORY_MB" : "APIFY_GOOGLE_MEMORY_MB"
+      ] || defaultMb,
+    );
   }
-  if (source === "meta") {
-    return Number(process.env.APIFY_META_MEMORY_MB || 2048);
-  }
-  return Number(process.env.APIFY_GOOGLE_MEMORY_MB || 2048);
+  return Number(process.env.APIFY_META_MEMORY_MB || 2048);
 }
 
 const TERMINAL = new Set(["SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"]);

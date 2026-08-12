@@ -23,20 +23,36 @@ export function ReportView({ report }: { report: ReportData }) {
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Kpi
           label={`Inversión est. ${client}`}
-          value={money(report.summary.clientSpendTotal)}
+          value={
+            report.summary.clientSpendTotal > 0
+              ? money(report.summary.clientSpendTotal)
+              : "Sin datos"
+          }
         />
         <Kpi
           label={`Inversión est. ${competitor}`}
-          value={money(report.summary.competitorSpendTotal)}
+          value={
+            report.summary.competitorSpendTotal > 0
+              ? money(report.summary.competitorSpendTotal)
+              : "Sin datos"
+          }
         />
         <Kpi
           label="SOV est. medios externos"
-          value={`${report.summary.clientShareExternal}% / ${report.summary.competitorShareExternal}%`}
+          value={
+            report.externalSov.length > 0
+              ? `${report.summary.clientShareExternal}% / ${report.summary.competitorShareExternal}%`
+              : "Sin datos"
+          }
           hint={`${client} / ${competitor}`}
         />
         <Kpi
           label="SOV est. paid owned"
-          value={`${report.summary.clientSharePaid}% / ${report.summary.competitorSharePaid}%`}
+          value={
+            report.paidSov.some((r) => r.activeAds > 0)
+              ? `${report.summary.clientSharePaid}% / ${report.summary.competitorSharePaid}%`
+              : "Sin datos"
+          }
           hint={`${client} / ${competitor}`}
         />
       </div>
